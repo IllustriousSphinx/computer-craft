@@ -1,0 +1,152 @@
+-- ComputerCraft Chest Transfer Script
+-- This script moves items from a source chest to a destination chest
+-- Place the turtle between two chests or configure positions as needed
+
+-- Configuration
+local SOURCE_DIRECTION = "left"    -- Direction of source chest relative to turtle
+local DEST_DIRECTION = "right"     -- Direction of destination chest relative to turtle
+local TRANSFER_ALL = true          -- Set to false to transfer specific amounts
+local ITEMS_PER_TRANSFER = 64      -- Max items to transfer per slot (if not transferring all)
+
+-- Direction mappings for peripheral calls
+local DIRECTIONS = {
+    left = "left",
+    right = "right", 
+    front = "front",
+    back = "back",
+    top = "top",
+    bottom = "bottom"
+}
+
+-- Function to get peripheral in specified direction
+local function getChest(direction)
+    local chest = peripheral.wrap(direction)
+    if not chest then
+        error("No chest found in direction: " .. direction)
+    end
+    return chest
+end
+
+-- Function to transfer items from source to destination
+local function transferItems()
+    print("Starting item transfer...")
+    
+    -- Get chest peripherals
+    local sourceChest = getChest(SOURCE_DIRECTION)
+    local destChest = getChest(DEST_DIRECTION)
+    
+    -- Get all items from source chest
+    local sourceItems = sourceChest.list()
+    
+    if not sourceItems or next(sourceItems) == nil then
+        print("Source chest is empty!")
+        return
+    end
+    
+    local totalTransferred = 0
+    
+    -- Iterate through each slot in source chest
+    for slot, itemData in pairs(sourceItems) do
+        if itemData and itemData.count > 0 then
+            local itemName = itemData.name
+            local itemCount = itemData.count
+            
+            print("Found: " .. itemCount .. "x " .. itemName .. " in slot " .. slot)
+            
+            -- Determine how many items to transfer
+            local transferAmount = TRANSFER_ALL and itemCount or math.min(itemCount, ITEMS_PER_TRANSFER)
+            
+            -- Try to push items to destination chest
+            local transferred = sourceChest.pushItems(peripheral.getName(destChest), slot, transferAmount)
+            
+            if transferred > 0 then
+                print("Transferred: " .. transferred .. "x " .. itemName)
+                totalTransferred = totalTransferred + transferred
+            else
+                print("Failed to transfer " .. itemName .. " - destination chest may be full")
+            end
+        end
+    end
+    
+    print("Transfer complete! Total items moved: " .. totalTransferred)
+end
+
+-- Function to check chest connections
+local function checkConnections()
+    print("Checking chest connections...")
+    
+    local sourceChest = peripheral.wrap(SOURCE_DIRECTION)
+    local destChest = peripheral.wrap(DEST_DIRECTION)
+    
+    if not sourceChest then
+        error("No source chest found at " .. SOURCE_DIRECTION .. "! Make sure a chest is connected.")
+    end
+    
+    if not destChest then
+        error("No destination chest found at " .. DEST_DIRECTION .. "! Make sure a chest is connected.")
+    end
+    
+    print("✓ Source chest connected at " .. SOURCE_DIRECTION)
+    print("✓ Destination chest connected at " .. DEST_DIRECTION)
+    
+    -- Show chest contents summary
+    local sourceItems = sourceChest.list()
+    local sourceCount = 0
+    for _ in pairs(sourceItems or {}) do sourceCount = sourceCount + 1 end
+    
+    local destItems = destChest.list()
+    local destCount = 0
+    for _ in pairs(destItems or {}) do destCount = destCount + 1 end
+    
+    print("Source chest has items in " .. sourceCount .. " slots")
+    print("Destination chest has items in " .. destCount .. " slots")
+end
+
+-- Function to display help
+local function showHelp()
+    print("=== ComputerCraft Chest Transfer ===")
+    print("Commands:")
+    print("  transfer - Move items from source to destination chest")
+    print("  check    - Check chest connections and status")
+    print("  config   - Show current configuration")
+    print("  help     - Show this help message")
+    print("")
+    print("Current setup:")
+    print("  Source chest: " .. SOURCE_DIRECTION)
+    print("  Destination chest: " .. DEST_DIRECTION)
+    print("  Transfer mode: " .. (TRANSFER_ALL and "All items" or "Limited (" .. ITEMS_PER_TRANSFER .. " per slot)"))
+end
+
+-- Function to show configuration
+local function showConfig()
+    print("=== Current Configuration ===")
+    print("Source direction: " .. SOURCE_DIRECTION)
+    print("Destination direction: " .. DEST_DIRECTION)
+    print("Transfer all items: " .. tostring(TRANSFER_ALL))
+    if not TRANSFER_ALL then
+        print("Items per transfer: " .. ITEMS_PER_TRANSFER)
+    end
+end
+
+-- Main program
+local function main()
+    local args = {...}
+    local command = args[1] or "help"
+    
+    if command == "transfer" then
+        checkConnections()
+        transferItems()
+    elseif command == "check" then
+        checkConnections()
+    elseif command == "config" then
+        showConfig()
+    elseif command == "help" then
+        showHelp()
+    else
+        print("Unknown command: " .. command)
+        showHelp()
+    end
+end
+
+-- Run the program
+main()

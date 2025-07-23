@@ -1,22 +1,12 @@
 -- ComputerCraft Chest Transfer Script
 -- This script moves items from a source chest to a destination chest
--- Place the turtle between two chests or configure positions as needed
+-- Place the computer next to two chests
 
 -- Configuration
-local SOURCE_DIRECTION = "left"    -- Direction of source chest relative to turtle
-local DEST_DIRECTION = "right"     -- Direction of destination chest relative to turtle
+local SOURCE_DIRECTION = "left"    -- Direction of source chest relative to computer
+local DEST_DIRECTION = "right"     -- Direction of destination chest relative to computer
 local TRANSFER_ALL = true          -- Set to false to transfer specific amounts
 local ITEMS_PER_TRANSFER = 64      -- Max items to transfer per slot (if not transferring all)
-
--- Direction mappings for peripheral calls
-local DIRECTIONS = {
-    left = "left",
-    right = "right", 
-    front = "front",
-    back = "back",
-    top = "top",
-    bottom = "bottom"
-}
 
 -- Function to get peripheral in specified direction
 local function getChest(direction)
@@ -79,11 +69,15 @@ local function checkConnections()
     local destChest = peripheral.wrap(DEST_DIRECTION)
     
     if not sourceChest then
-        error("No source chest found at " .. SOURCE_DIRECTION .. "! Make sure a chest is connected.")
+        print("ERROR: No source chest found at " .. SOURCE_DIRECTION .. "!")
+        print("Make sure a chest is placed to the " .. SOURCE_DIRECTION .. " of the computer.")
+        return false
     end
     
     if not destChest then
-        error("No destination chest found at " .. DEST_DIRECTION .. "! Make sure a chest is connected.")
+        print("ERROR: No destination chest found at " .. DEST_DIRECTION .. "!")
+        print("Make sure a chest is placed to the " .. DEST_DIRECTION .. " of the computer.")
+        return false
     end
     
     print("✓ Source chest connected at " .. SOURCE_DIRECTION)
@@ -100,53 +94,54 @@ local function checkConnections()
     
     print("Source chest has items in " .. sourceCount .. " slots")
     print("Destination chest has items in " .. destCount .. " slots")
+    return true
 end
 
 -- Function to display help
 local function showHelp()
     print("=== ComputerCraft Chest Transfer ===")
-    print("Commands:")
-    print("  transfer - Move items from source to destination chest")
-    print("  check    - Check chest connections and status")
-    print("  config   - Show current configuration")
-    print("  help     - Show this help message")
+    print("This script transfers items between two chests.")
     print("")
-    print("Current setup:")
+    print("Setup:")
+    print("1. Place computer between two chests")
+    print("2. Edit the script to set correct directions")
+    print("3. Run the script")
+    print("")
+    print("Current configuration:")
     print("  Source chest: " .. SOURCE_DIRECTION)
     print("  Destination chest: " .. DEST_DIRECTION)
     print("  Transfer mode: " .. (TRANSFER_ALL and "All items" or "Limited (" .. ITEMS_PER_TRANSFER .. " per slot)"))
+    print("")
+    print("The script will automatically start transferring items.")
 end
 
--- Function to show configuration
-local function showConfig()
-    print("=== Current Configuration ===")
-    print("Source direction: " .. SOURCE_DIRECTION)
-    print("Destination direction: " .. DEST_DIRECTION)
-    print("Transfer all items: " .. tostring(TRANSFER_ALL))
-    if not TRANSFER_ALL then
-        print("Items per transfer: " .. ITEMS_PER_TRANSFER)
-    end
+-- Main program execution
+print("=== ComputerCraft Chest Transfer ===")
+print("")
+
+-- Show current configuration
+showHelp()
+print("")
+
+-- Check if user wants to proceed
+print("Press any key to start transfer, or 'q' to quit...")
+local input = read()
+if input == "q" or input == "Q" then
+    print("Transfer cancelled.")
+    return
 end
 
--- Main program
-local function main()
-    local args = {...}
-    local command = args[1] or "help"
-    
-    if command == "transfer" then
-        checkConnections()
-        transferItems()
-    elseif command == "check" then
-        checkConnections()
-    elseif command == "config" then
-        showConfig()
-    elseif command == "help" then
-        showHelp()
-    else
-        print("Unknown command: " .. command)
-        showHelp()
-    end
+-- Check connections and transfer items
+if checkConnections() then
+    print("")
+    print("Starting transfer in 3 seconds...")
+    sleep(1)
+    print("2...")
+    sleep(1)
+    print("1...")
+    sleep(1)
+    transferItems()
+else
+    print("")
+    print("Please fix the chest connections and run the script again.")
 end
-
--- Run the program
-main()

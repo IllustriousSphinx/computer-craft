@@ -1,1 +1,235 @@
+-- inventory_dumper.lua - Dumps all connected storage inventories to website
+local WEBSITE_URL = "https://v0-computercraft.vercel.app/api/data"
+local COMPUTER_NAME = "inventory_dumper_" .. os.getComputerID()
 
+-- Find all connected storage devices
+local function findStorageDevices()
+    local storages = {}
+    local peripherals = peripheral.getNames()
+    
+    print("Scanning for storage devices...")
+    
+    for _, name in pairs(peripherals) do
+        local pType = peripheral.getType(name)
+        local device = peripheral.wrap(name)
+        
+        -- Check if it's a storage device (has list() method)
+        if device and device.list then
+            local success, items = pcall(device.list)
+            if success then
+                storages[name] = {
+                    device = device,
+                    type = pType,
+                    size = device.size and device.size() or 0
+                }
+                print("Found storage: " .. name .. " (" .. pType .. ")")
+            end
+        end
+    end
+    
+    return storages
+end
+
+-- Get detailed item information
+local function getItemDetails(device, slot, item)
+    local details = {
+        name = item.name,
+        count = item.count,
+        slot = slot
+    }
+    
+    -- Try to get additional details if available
+    if device.getItemDetail then
+        local success, itemDetail = pcall(device.getItemDetail, slot)
+        if success and itemDetail then
+            details.displayName = itemDetail.displayName
+            details.maxCount = itemDetail.maxCount
+            details.tags = itemDetail.tags
+            details.nbt = itemDetail.nbt
+        end
+    end
+    
+    return details
+end
+
+-- Dump inventory from a single storage device
+local function dumpStorageInventory(name, storage)
+    local device = storage.device
+    local items = device.list()
+    local inventory = {}
+    local totalItems = 0
+    local uniqueItems = 0
+    local itemCounts = {}
+    
+    print("Scanning " .. name .. "...")
+    
+    for slot, item in pairs(items) do
+        local itemDetails = getItemDetails(device, slot, item)
+        inventory[slot] = itemDetails
+        totalItems = totalItems + item.count
+        
+        -- Count unique items
+        if itemCounts[item.name] then
+            itemCounts[item.name] = itemCounts[item.name] + item.count
+        else
+            itemCounts[item.name] = item.count
+            uniqueItems = uniqueItems + 1
+        end
+    end
+    
+    return {
+        storage_name = name,
+        storage_type = storage.type,
+        storage_size = storage.size,
+        slots_used = 0,
+        total_items = totalItems,
+        unique_items = uniqueItems,
+        items = inventory,
+        item_counts = itemCounts,
+        timestamp = os.epoch("utc")
+    }
+end
+
+-- Send inventory data to website
+local function sendInventoryData(inventoryData)
+    local payload = {
+        source = COMPUTER_NAME,
+        type = "inventory_dump",
+        data = inventoryData
+    }
+    
+    print("Sending inventory data to website...")
+    
+    http.request(
+        WEBSITE_URL,
+        textutils.serializeJSON(payload),
+        {["Content-Type"] = "application/json"}
+    )
+    
+    -- Wait for response
+    local timer = os.startTimer(15)
+    while true do
+        local event, url, response, error = os.pullEvent()
+        
+        if event == "http_success" and url == WEBSITE_URL then
+            print("✓ Inventory data sent successfully!")
+            local result = response.readAll()
+            response.close()
+            return true
+            
+        elseif event == "http_failure" and url == WEBSITE_URL then
+            print("✗ Failed to send inventory data")
+            print("Error: " .. tostring(error))
+            return false
+            
+        elseif event == "timer" and url == timer then
+            print("✗ Request timed out")
+            return false
+        end
+    end
+end
+
+-- Main inventory dumping function
+local function dumpAllInventories()
+    print("=== ComputerCraft Inventory Dumper ===")
+    
+    local storages = findStorageDevices()
+    
+    if next(storages) == nil then
+        print("No storage devices found!")
+        print("Make sure storage devices are connected as peripherals.")
+        return false
+    end
+    
+    local allInventories = {}
+    local totalStorages = 0
+    local grandTotalItems = 0
+    local allItemCounts = {}
+    
+    -- Dump each storage
+    for name, storage in pairs(storages) do
+        local inventoryData = dumpStorageInventory(name, storage)
+        allInventories[name] = inventoryData
+        totalStorages = totalStorages + 1
+        grandTotalItems = grandTotalItems + inventoryData.total_items
+        
+        -- Merge item counts
+        for itemName, count in pairs(inventoryData.item_counts) do
+            if allItemCounts[itemName] then
+                allItemCounts[itemName] = allItemCounts[itemName] + count
+            else
+                allItemCounts[itemName] = count
+            end
+        end
+        
+        print("✓ " .. name .. ": " .. inventoryData.total_items .. " items")
+    end
+    
+    -- Create summary data
+    local summaryData = {
+        total_storages = totalStorages,
+        total_items = grandTotalItems,
+        unique_items = 0,
+        storages = allInventories,
+        item_summary = allItemCounts,
+        scan_timestamp = os.epoch("utc"),
+        computer_id = os.getComputerID(),
+        computer_label = os.getComputerLabel() or "Unlabeled"
+    }
+    
+    -- Count unique items across all storages
+    for _ in pairs(allItemCounts) do
+        summaryData.unique_items = summaryData.unique_items + 1
+    end
+    
+    print("\n=== Inventory Summary ===")
+    print("Total Storages: " .. totalStorages)
+    print("Total Items: " .. grandTotalItems)
+    print("Unique Items: " .. summaryData.unique_items)
+    
+    -- Send to website
+    return sendInventoryData(summaryData)
+end
+
+-- Auto-scan mode
+local function autoScan()
+    print("Starting auto-scan mode...")
+    print("Press any key to stop")
+    
+    while true do
+        dumpAllInventories()
+        
+        -- Wait 5 minutes or until key press
+        local timer = os.startTimer(300) -- 5 minutes
+        
+        while true do
+            local event, param = os.pullEvent()
+            
+            if event == "timer" and param == timer then
+                break -- Time to scan again
+            elseif event == "key" then
+                print("Auto-scan stopped by user")
+                return
+            end
+        end
+    end
+end
+
+-- Main program
+print("ComputerCraft Inventory Dumper")
+print("1. Single scan")
+print("2. Auto-scan (every 5 minutes)")
+print("Choose option (1 or 2): ")
+
+local choice = read()
+
+if choice == "1" then
+    dumpAllInventories()
+elseif choice == "2" then
+    autoScan()
+else
+    print("Single scan selected by default")
+    dumpAllInventories()
+end
+
+print("Program complete!")

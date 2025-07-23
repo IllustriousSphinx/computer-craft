@@ -22,7 +22,7 @@ local DIRECTIONS = {
 local function getChest(direction)
     local chest = peripheral.wrap(direction)
     if not chest then
-        error("No chest found in direction: "  direction)
+        error("No chest found in direction: " .. direction)
     end
     return chest
 end

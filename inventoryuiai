@@ -1,0 +1,705 @@
+-- ComputerCraft Chest Transfer Installer
+-- This script installs the chest transfer program with UI
+
+local PROGRAM_NAME = "chest_transfer"
+local UI_PROGRAM_NAME = "chest_ui"
+local CONFIG_FILE = "chest_config.lua"
+
+-- UI Program code
+local UI_PROGRAM_CODE = [[
+-- ComputerCraft Chest Transfer UI
+-- Advanced UI for viewing and managing chest inventories
+
+-- Load configuration
+local config = {}
+if fs.exists("chest_config.lua") then
+    local configFile = fs.open("chest_config.lua", "r")
+    local configCode = configFile.readAll()
+    configFile.close()
+    local configFunc = load(configCode)
+    if configFunc then
+        config = configFunc() or {}
+    end
+end
+
+-- Configuration
+local SOURCE_DIRECTION = config.source or "left"
+local DEST_DIRECTION = config.dest or "right"
+
+-- UI State
+local currentView = "main"
+local scrollOffset = 0
+local maxDisplayItems = 12
+
+-- Colors
+local colors = {
+    bg = colors.black,
+    header = colors.blue,
+    text = colors.white,
+    highlight = colors.yellow,
+    button = colors.green,
+    error = colors.red,
+    success = colors.lime
+}
+
+local w, h = term.getSize()
+
+local function clearScreen()
+    term.setBackgroundColor(colors.bg)
+    term.setTextColor(colors.text)
+    term.clear()
+    term.setCursorPos(1, 1)
+end
+
+local function drawHeader(title)
+    term.setBackgroundColor(colors.header)
+    term.setTextColor(colors.white)
+    term.setCursorPos(1, 1)
+    term.clearLine()
+    
+    local padding = math.floor((w - #title) / 2)
+    term.setCursorPos(padding, 1)
+    term.write(title)
+    
+    term.setBackgroundColor(colors.bg)
+    term.setTextColor(colors.text)
+end
+
+local function getChest(direction)
+    return peripheral.wrap(direction)
+end
+
+local function getChestInfo(direction)
+    local chest = getChest(direction)
+    if not chest then
+        return nil, "No chest connected"
+    end
+    
+    local items = chest.list()
+    local itemCount = 0
+    local totalItems = 0
+    
+    for slot, item in pairs(items or {}) do
+        itemCount = itemCount + 1
+        totalItems = totalItems + item.count
+    end
+    
+    return {
+        chest = chest,
+        items = items or {},
+        itemCount = itemCount,
+        totalItems = totalItems,
+        direction = direction
+    }, nil
+end
+
+local function formatItemName(name, maxLength)
+    if not name then return "Unknown Item" end
+    
+    local displayName = name:gsub("^minecraft:", "")
+    displayName = displayName:gsub("_", " ")
+    displayName = displayName:gsub("(%a)([%w_']*)", function(first, rest)
+        return first:upper() .. rest:lower()
+    end)
+    
+    if #displayName > maxLength then
+        displayName = displayName:sub(1, maxLength - 3) .. "..."
+    end
+    
+    return displayName
+end
+
+local function drawButton(x, y, text, selected)
+    term.setCursorPos(x, y)
+    if selected then
+        term.setBackgroundColor(colors.highlight)
+        term.setTextColor(colors.black)
+    else
+        term.setBackgroundColor(colors.button)
+        term.setTextColor(colors.white)
+    end
+    
+    term.write(" " .. text .. " ")
+    term.setBackgroundColor(colors.bg)
+    term.setTextColor(colors.text)
+end
+
+local function drawInventory(chestInfo, startY)
+    if not chestInfo or not chestInfo.items then
+        term.setCursorPos(2, startY)
+        term.setTextColor(colors.error)
+        term.write("No chest connected or chest is empty")
+        term.setTextColor(colors.text)
+        return
+    end
+    
+    local items = {}
+    for slot, item in pairs(chestInfo.items) do
+        table.insert(items, {slot = slot, item = item})
+    end
+    
+    table.sort(items, function(a, b)
+        return (a.item.name or "") < (b.item.name or "")
+    end)
+    
+    local displayCount = math.min(maxDisplayItems, #items - scrollOffset)
+    
+    for i = 1, displayCount do
+        local itemIndex = i + scrollOffset
+        if itemIndex <= #items then
+            local entry = items[itemIndex]
+            local slot = entry.slot
+            local item = entry.item
+            
+            local y = startY + i - 1
+            term.setCursorPos(2, y)
+            
+            local itemName = formatItemName(item.name, 25)
+            local count = item.count or 0
+            local line = string.format("%-25s x%d", itemName, count)
+            
+            term.setTextColor(colors.text)
+            term.write(line)
+            
+            term.setCursorPos(w - 8, y)
+            term.setTextColor(colors.highlight)
+            term.write("Slot " .. slot)
+            term.setTextColor(colors.text)
+        end
+    end
+    
+    if scrollOffset > 0 then
+        term.setCursorPos(w - 1, startY)
+        term.setTextColor(colors.highlight)
+        term.write("^")
+    end
+    
+    if scrollOffset + maxDisplayItems < #items then
+        term.setCursorPos(w - 1, startY + maxDisplayItems - 1)
+        term.setTextColor(colors.highlight)
+        term.write("v")
+    end
+    
+    term.setTextColor(colors.text)
+end
+
+local function drawMainMenu()
+    clearScreen()
+    drawHeader("Chest Transfer UI")
+    
+    local sourceInfo, sourceError = getChestInfo(SOURCE_DIRECTION)
+    local destInfo, destError = getChestInfo(DEST_DIRECTION)
+    
+    term.setCursorPos(2, 3)
+    term.write("Source Chest (" .. SOURCE_DIRECTION .. "):")
+    term.setCursorPos(4, 4)
+    if sourceInfo then
+        term.setTextColor(colors.success)
+        term.write("Connected - " .. sourceInfo.itemCount .. " item types, " .. sourceInfo.totalItems .. " total items")
+    else
+        term.setTextColor(colors.error)
+        term.write("Error: " .. (sourceError or "Unknown error"))
+    end
+    
+    term.setCursorPos(2, 6)
+    term.setTextColor(colors.text)
+    term.write("Destination Chest (" .. DEST_DIRECTION .. "):")
+    term.setCursorPos(4, 7)
+    if destInfo then
+        term.setTextColor(colors.success)
+        term.write("Connected - " .. destInfo.itemCount .. " item types, " .. destInfo.totalItems .. " total items")
+    else
+        term.setTextColor(colors.error)
+        term.write("Error: " .. (destError or "Unknown error"))
+    end
+    
+    term.setTextColor(colors.text)
+    
+    drawButton(2, 9, "View Source Inventory", false)
+    drawButton(2, 11, "View Destination Inventory", false)
+    drawButton(2, 13, "Transfer All Items", false)
+    drawButton(2, 15, "Configure Settings", false)
+    drawButton(2, 17, "Exit", false)
+    
+    term.setCursorPos(2, h - 2)
+    term.setTextColor(colors.highlight)
+    term.write("Click on buttons to navigate, or press keys:")
+    term.setCursorPos(2, h - 1)
+    term.write("S=Source, D=Dest, T=Transfer, C=Config, Q=Quit")
+    term.setTextColor(colors.text)
+end
+
+local function drawInventoryView(chestType)
+    clearScreen()
+    local title = chestType == "source" and "Source Inventory" or "Destination Inventory"
+    local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
+    
+    drawHeader(title .. " (" .. direction .. ")")
+    
+    local chestInfo, error = getChestInfo(direction)
+    
+    if chestInfo then
+        term.setCursorPos(2, 3)
+        term.write("Items: " .. chestInfo.itemCount .. " types, " .. chestInfo.totalItems .. " total")
+        
+        drawInventory(chestInfo, 5)
+        
+        term.setCursorPos(2, h - 3)
+        term.setTextColor(colors.highlight)
+        term.write("Double-click item to extract | Up/Down arrows to scroll")
+        term.setCursorPos(2, h - 2)
+        term.write("B=Back | T=Transfer All | Q=Quit")
+        term.setTextColor(colors.text)
+    else
+        term.setCursorPos(2, 5)
+        term.setTextColor(colors.error)
+        term.write("Error: " .. (error or "Unknown error"))
+        term.setTextColor(colors.text)
+    end
+    
+    drawButton(2, h - 5, "Back to Main Menu", false)
+end
+
+local function showExtractionDialog(chestType, slot, item)
+    local dialogW = 40
+    local dialogH = 8
+    local startX = math.floor((w - dialogW) / 2)
+    local startY = math.floor((h - dialogH) / 2)
+    
+    term.setBackgroundColor(colors.header)
+    for y = startY, startY + dialogH - 1 do
+        term.setCursorPos(startX, y)
+        term.write(string.rep(" ", dialogW))
+    end
+    
+    term.setCursorPos(startX + 2, startY + 1)
+    term.setTextColor(colors.white)
+    term.write("Extract Items")
+    
+    local itemName = formatItemName(item.name, 30)
+    term.setCursorPos(startX + 2, startY + 3)
+    term.write("Item: " .. itemName)
+    term.setCursorPos(startX + 2, startY + 4)
+    term.write("Available: " .. item.count)
+    
+    term.setCursorPos(startX + 2, startY + 5)
+    term.write("Extract amount (max " .. item.count .. "):")
+    
+    term.setCursorPos(startX + 2, startY + 6)
+    term.setBackgroundColor(colors.white)
+    term.setTextColor(colors.black)
+    term.write(string.rep(" ", 10))
+    term.setCursorPos(startX + 2, startY + 6)
+    
+    local input = read()
+    local amount = tonumber(input)
+    
+    term.setBackgroundColor(colors.bg)
+    term.setTextColor(colors.text)
+    
+    if amount and amount > 0 and amount <= item.count then
+        local sourceDir = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
+        local destDir = chestType == "source" and DEST_DIRECTION or SOURCE_DIRECTION
+        
+        local sourceChest = getChest(sourceDir)
+        local destChest = getChest(destDir)
+        
+        if sourceChest and destChest then
+            local transferred = sourceChest.pushItems(peripheral.getName(destChest), slot, amount)
+            
+            term.setCursorPos(startX + 2, startY + 7)
+            if transferred > 0 then
+                term.setTextColor(colors.success)
+                term.write("Transferred " .. transferred .. " items!")
+            else
+                term.setTextColor(colors.error)
+                term.write("Transfer failed!")
+            end
+            
+            sleep(2)
+        end
+    elseif amount then
+        term.setCursorPos(startX + 2, startY + 7)
+        term.setTextColor(colors.error)
+        term.write("Invalid amount!")
+        sleep(2)
+    end
+end
+
+local function handleClick(x, y)
+    if currentView == "main" then
+        if y == 9 and x >= 2 and x <= 25 then
+            currentView = "source"
+            scrollOffset = 0
+        elseif y == 11 and x >= 2 and x <= 30 then
+            currentView = "dest"
+            scrollOffset = 0
+        elseif y == 13 and x >= 2 and x <= 20 then
+            local sourceInfo = getChestInfo(SOURCE_DIRECTION)
+            if sourceInfo and sourceInfo.chest then
+                local destChest = getChest(DEST_DIRECTION)
+                if destChest then
+                    local transferred = 0
+                    for slot, item in pairs(sourceInfo.items) do
+                        local moved = sourceInfo.chest.pushItems(peripheral.getName(destChest), slot)
+                        transferred = transferred + moved
+                    end
+                    
+                    term.setCursorPos(2, 19)
+                    term.setTextColor(colors.success)
+                    term.write("Transferred " .. transferred .. " items!")
+                    term.setTextColor(colors.text)
+                    sleep(2)
+                end
+            end
+        elseif y == 15 and x >= 2 and x <= 20 then
+            shell.run("edit", "chest_config.lua")
+        elseif y == 17 and x >= 2 and x <= 8 then
+            return false
+        end
+    elseif currentView == "source" or currentView == "dest" then
+        if y >= 5 and y < 5 + maxDisplayItems then
+            local chestType = currentView
+            local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
+            local chestInfo = getChestInfo(direction)
+            
+            if chestInfo and chestInfo.items then
+                local items = {}
+                for slot, item in pairs(chestInfo.items) do
+                    table.insert(items, {slot = slot, item = item})
+                end
+                
+                table.sort(items, function(a, b)
+                    return (a.item.name or "") < (b.item.name or "")
+                end)
+                
+                local itemIndex = (y - 5) + 1 + scrollOffset
+                if itemIndex <= #items then
+                    local entry = items[itemIndex]
+                    showExtractionDialog(chestType, entry.slot, entry.item)
+                end
+            end
+        elseif y == h - 5 and x >= 2 and x <= 20 then
+            currentView = "main"
+        end
+    end
+    
+    return true
+end
+
+local function handleKey(key)
+    if key == keys.q then
+        return false
+    elseif key == keys.b and (currentView == "source" or currentView == "dest") then
+        currentView = "main"
+    elseif key == keys.s and currentView == "main" then
+        currentView = "source"
+        scrollOffset = 0
+    elseif key == keys.d and currentView == "main" then
+        currentView = "dest"
+        scrollOffset = 0
+    elseif key == keys.up and (currentView == "source" or currentView == "dest") then
+        scrollOffset = math.max(0, scrollOffset - 1)
+    elseif key == keys.down and (currentView == "source" or currentView == "dest") then
+        scrollOffset = scrollOffset + 1
+    elseif key == keys.t then
+        local sourceInfo = getChestInfo(SOURCE_DIRECTION)
+        if sourceInfo and sourceInfo.chest then
+            local destChest = getChest(DEST_DIRECTION)
+            if destChest then
+                local transferred = 0
+                for slot, item in pairs(sourceInfo.items) do
+                    local moved = sourceInfo.chest.pushItems(peripheral.getName(destChest), slot)
+                    transferred = transferred + moved
+                end
+                
+                term.setCursorPos(2, h - 1)
+                term.setTextColor(colors.success)
+                term.write("Transferred " .. transferred .. " items!")
+                term.setTextColor(colors.text)
+                sleep(1)
+            end
+        end
+    end
+    
+    return true
+end
+
+local function runUI()
+    local lastClickTime = 0
+    local lastClickX, lastClickY = 0, 0
+    
+    while true do
+        if currentView == "main" then
+            drawMainMenu()
+        elseif currentView == "source" then
+            drawInventoryView("source")
+        elseif currentView == "dest" then
+            drawInventoryView("dest")
+        end
+        
+        local event, button, x, y = os.pullEvent()
+        
+        if event == "mouse_click" then
+            local currentTime = os.clock()
+            local isDoubleClick = (currentTime - lastClickTime < 0.5) and 
+                                 (x == lastClickX) and (y == lastClickY)
+            
+            if isDoubleClick and (currentView == "source" or currentView == "dest") then
+                if y >= 5 and y < 5 + maxDisplayItems then
+                    local chestType = currentView
+                    local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
+                    local chestInfo = getChestInfo(direction)
+                    
+                    if chestInfo and chestInfo.items then
+                        local items = {}
+                        for slot, item in pairs(chestInfo.items) do
+                            table.insert(items, {slot = slot, item = item})
+                        end
+                        
+                        table.sort(items, function(a, b)
+                            return (a.item.name or "") < (b.item.name or "")
+                        end)
+                        
+                        local itemIndex = (y - 5) + 1 + scrollOffset
+                        if itemIndex <= #items then
+                            local entry = items[itemIndex]
+                            showExtractionDialog(chestType, entry.slot, entry.item)
+                        end
+                    end
+                end
+            else
+                if not handleClick(x, y) then
+                    break
+                end
+            end
+            
+            lastClickTime = currentTime
+            lastClickX, lastClickY = x, y
+            
+        elseif event == "key" then
+            if not handleKey(button) then
+                break
+            end
+        end
+    end
+end
+
+term.setBackgroundColor(colors.bg)
+term.setTextColor(colors.text)
+clearScreen()
+
+print("Starting Chest Transfer UI...")
+sleep(1)
+
+runUI()
+
+clearScreen()
+term.setCursorPos(1, 1)
+print("Chest Transfer UI closed.")
+]]
+
+-- Original program code (simplified version)
+local PROGRAM_CODE = [[
+-- ComputerCraft Chest Transfer Script (Simple Version)
+-- Run 'chest_ui' for the advanced UI version
+
+local config = {}
+if fs.exists("chest_config.lua") then
+    local configFile = fs.open("chest_config.lua", "r")
+    local configCode = configFile.readAll()
+    configFile.close()
+    local configFunc = load(configCode)
+    if configFunc then
+        config = configFunc() or {}
+    end
+end
+
+local SOURCE_DIRECTION = config.source or "left"
+local DEST_DIRECTION = config.dest or "right"
+
+local function getChest(direction)
+    return peripheral.wrap(direction)
+end
+
+local function transferItems()
+    print("Starting item transfer...")
+    
+    local sourceChest = getChest(SOURCE_DIRECTION)
+    local destChest = getChest(DEST_DIRECTION)
+    
+    if not sourceChest then
+        print("ERROR: No source chest found at " .. SOURCE_DIRECTION)
+        return
+    end
+    
+    if not destChest then
+        print("ERROR: No destination chest found at " .. DEST_DIRECTION)
+        return
+    end
+    
+    local sourceItems = sourceChest.list()
+    
+    if not sourceItems or next(sourceItems) == nil then
+        print("Source chest is empty!")
+        return
+    end
+    
+    local totalTransferred = 0
+    
+    for slot, itemData in pairs(sourceItems) do
+        if itemData and itemData.count > 0 then
+            local transferred = sourceChest.pushItems(peripheral.getName(destChest), slot)
+            if transferred > 0 then
+                print("Transferred: " .. transferred .. "x " .. itemData.name)
+                totalTransferred = totalTransferred + transferred
+            end
+        end
+    end
+    
+    print("Transfer complete! Total items moved: " .. totalTransferred)
+end
+
+print("=== ComputerCraft Chest Transfer ===")
+print("Simple version - run 'chest_ui' for advanced interface")
+print("")
+transferItems()
+]]
+
+-- Configuration template
+local CONFIG_TEMPLATE = [[
+-- Chest Transfer Configuration
+-- Edit these values to match your setup
+
+return {
+    source = "left",           -- Direction of source chest (left, right, front, back, top, bottom)
+    dest = "right",            -- Direction of destination chest
+    transferAll = true,        -- Transfer all items (true) or limited amounts (false)
+    itemsPerTransfer = 64      -- Max items per slot if transferAll is false
+}
+]]
+
+-- Function to write file safely
+local function writeFile(filename, content)
+    local file = fs.open(filename, "w")
+    if not file then
+        error("Could not create file: " .. filename)
+    end
+    file.write(content)
+    file.close()
+    return true
+end
+
+-- Function to configure the program
+local function configure()
+    print("=== Configuration Setup ===")
+    print("")
+    
+    print("Available directions: left, right, front, back, top, bottom")
+    print("")
+    
+    write("Source chest direction [left]: ")
+    local source = read()
+    if source == "" then source = "left" end
+    
+    write("Destination chest direction [right]: ")
+    local dest = read()
+    if dest == "" then dest = "right" end
+    
+    write("Transfer all items? (y/n) [y]: ")
+    local transferAllInput = read()
+    local transferAll = transferAllInput ~= "n" and transferAllInput ~= "N"
+    
+    local itemsPerTransfer = 64
+    if not transferAll then
+        write("Items per transfer [64]: ")
+        local itemsInput = read()
+        if itemsInput ~= "" then
+            itemsPerTransfer = tonumber(itemsInput) or 64
+        end
+    end
+    
+    local configContent = string.format([[
+-- Chest Transfer Configuration
+-- Generated by installer
+
+return {
+    source = "%s",
+    dest = "%s", 
+    transferAll = %s,
+    itemsPerTransfer = %d
+}
+]], source, dest, tostring(transferAll), itemsPerTransfer)
+    
+    writeFile(CONFIG_FILE, configContent)
+    print("Configuration saved!")
+    return true
+end
+
+-- Main installer function
+local function install()
+    print("=== ComputerCraft Chest Transfer Installer ===")
+    print("")
+    print("This installer will set up both the simple and UI versions.")
+    print("")
+    
+    if fs.exists(PROGRAM_NAME) or fs.exists(UI_PROGRAM_NAME) then
+        print("Programs already exist. Overwrite? (y/n): ")
+        local overwrite = read()
+        if overwrite ~= "y" and overwrite ~= "Y" then
+            print("Installation cancelled.")
+            return
+        end
+    end
+    
+    print("Installing programs...")
+    
+    -- Write the simple program
+    if writeFile(PROGRAM_NAME, PROGRAM_CODE) then
+        print("✓ Simple program installed: " .. PROGRAM_NAME)
+    else
+        print("✗ Failed to install simple program")
+        return
+    end
+    
+    -- Write the UI program
+    if writeFile(UI_PROGRAM_NAME, UI_PROGRAM_CODE) then
+        print("✓ UI program installed: " .. UI_PROGRAM_NAME)
+    else
+        print("✗ Failed to install UI program")
+        return
+    end
+    
+    -- Configure the program
+    print("")
+    print("Would you like to configure the programs now? (y/n): ")
+    local configNow = read()
+    
+    if configNow == "y" or configNow == "Y" then
+        configure()
+    else
+        writeFile(CONFIG_FILE, CONFIG_TEMPLATE)
+        print("✓ Default configuration created: " .. CONFIG_FILE)
+    end
+    
+    print("")
+    print("=== Installation Complete! ===")
+    print("")
+    print("Available programs:")
+    print("• " .. PROGRAM_NAME .. " - Simple transfer program")
+    print("• " .. UI_PROGRAM_NAME .. " - Advanced UI with inventory viewer")
+    print("")
+    print("To reconfigure: edit " .. CONFIG_FILE)
+    print("")
+    print("Which program would you like to run? (s=simple, u=ui, n=none): ")
+    local choice = read()
+    
+    if choice == "s" or choice == "S" then
+        shell.run(PROGRAM_NAME)
+    elseif choice == "u" or choice == "U" then
+        shell.run(UI_PROGRAM_NAME)
+    end
+end
+
+-- Run the installer
+install()

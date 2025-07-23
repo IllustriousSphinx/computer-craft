@@ -1,3 +1,3 @@
 [# computer-craft]
 
-(https://raw.githubusercontent.com/IllustriousSphinx/computer-craft/edit/main/troubleshoot.lua)
+(https://raw.githubusercontent.com/IllustriousSphinx/computer-craft/troubleshoot.lua)

@@ -31,8 +31,8 @@ local currentView = "main"
 local scrollOffset = 0
 local maxDisplayItems = 12
 
--- Colors
-local colors = {
+-- Color definitions (using ComputerCraft color constants)
+local uiColors = {
     bg = colors.black,
     header = colors.blue,
     text = colors.white,
@@ -45,14 +45,14 @@ local colors = {
 local w, h = term.getSize()
 
 local function clearScreen()
-    term.setBackgroundColor(colors.bg)
-    term.setTextColor(colors.text)
+    term.setBackgroundColor(uiColors.bg)
+    term.setTextColor(uiColors.text)
     term.clear()
     term.setCursorPos(1, 1)
 end
 
 local function drawHeader(title)
-    term.setBackgroundColor(colors.header)
+    term.setBackgroundColor(uiColors.header)
     term.setTextColor(colors.white)
     term.setCursorPos(1, 1)
     term.clearLine()
@@ -61,8 +61,8 @@ local function drawHeader(title)
     term.setCursorPos(padding, 1)
     term.write(title)
     
-    term.setBackgroundColor(colors.bg)
-    term.setTextColor(colors.text)
+    term.setBackgroundColor(uiColors.bg)
+    term.setTextColor(uiColors.text)
 end
 
 local function getChest(direction)
@@ -112,24 +112,24 @@ end
 local function drawButton(x, y, text, selected)
     term.setCursorPos(x, y)
     if selected then
-        term.setBackgroundColor(colors.highlight)
+        term.setBackgroundColor(uiColors.highlight)
         term.setTextColor(colors.black)
     else
-        term.setBackgroundColor(colors.button)
+        term.setBackgroundColor(uiColors.button)
         term.setTextColor(colors.white)
     end
     
     term.write(" " .. text .. " ")
-    term.setBackgroundColor(colors.bg)
-    term.setTextColor(colors.text)
+    term.setBackgroundColor(uiColors.bg)
+    term.setTextColor(uiColors.text)
 end
 
 local function drawInventory(chestInfo, startY)
     if not chestInfo or not chestInfo.items then
         term.setCursorPos(2, startY)
-        term.setTextColor(colors.error)
+        term.setTextColor(uiColors.error)
         term.write("No chest connected or chest is empty")
-        term.setTextColor(colors.text)
+        term.setTextColor(uiColors.text)
         return
     end
     
@@ -158,29 +158,29 @@ local function drawInventory(chestInfo, startY)
             local count = item.count or 0
             local line = string.format("%-25s x%d", itemName, count)
             
-            term.setTextColor(colors.text)
+            term.setTextColor(uiColors.text)
             term.write(line)
             
             term.setCursorPos(w - 8, y)
-            term.setTextColor(colors.highlight)
+            term.setTextColor(uiColors.highlight)
             term.write("Slot " .. slot)
-            term.setTextColor(colors.text)
+            term.setTextColor(uiColors.text)
         end
     end
     
     if scrollOffset > 0 then
         term.setCursorPos(w - 1, startY)
-        term.setTextColor(colors.highlight)
+        term.setTextColor(uiColors.highlight)
         term.write("^")
     end
     
     if scrollOffset + maxDisplayItems < #items then
         term.setCursorPos(w - 1, startY + maxDisplayItems - 1)
-        term.setTextColor(colors.highlight)
+        term.setTextColor(uiColors.highlight)
         term.write("v")
     end
     
-    term.setTextColor(colors.text)
+    term.setTextColor(uiColors.text)
 end
 
 local function drawMainMenu()
@@ -194,26 +194,26 @@ local function drawMainMenu()
     term.write("Source Chest (" .. SOURCE_DIRECTION .. "):")
     term.setCursorPos(4, 4)
     if sourceInfo then
-        term.setTextColor(colors.success)
+        term.setTextColor(uiColors.success)
         term.write("Connected - " .. sourceInfo.itemCount .. " item types, " .. sourceInfo.totalItems .. " total items")
     else
-        term.setTextColor(colors.error)
+        term.setTextColor(uiColors.error)
         term.write("Error: " .. (sourceError or "Unknown error"))
     end
     
     term.setCursorPos(2, 6)
-    term.setTextColor(colors.text)
+    term.setTextColor(uiColors.text)
     term.write("Destination Chest (" .. DEST_DIRECTION .. "):")
     term.setCursorPos(4, 7)
     if destInfo then
-        term.setTextColor(colors.success)
+        term.setTextColor(uiColors.success)
         term.write("Connected - " .. destInfo.itemCount .. " item types, " .. destInfo.totalItems .. " total items")
     else
-        term.setTextColor(colors.error)
+        term.setTextColor(uiColors.error)
         term.write("Error: " .. (destError or "Unknown error"))
     end
     
-    term.setTextColor(colors.text)
+    term.setTextColor(uiColors.text)
     
     drawButton(2, 9, "View Source Inventory", false)
     drawButton(2, 11, "View Destination Inventory", false)
@@ -222,11 +222,11 @@ local function drawMainMenu()
     drawButton(2, 17, "Exit", false)
     
     term.setCursorPos(2, h - 2)
-    term.setTextColor(colors.highlight)
+    term.setTextColor(uiColors.highlight)
     term.write("Click on buttons to navigate, or press keys:")
     term.setCursorPos(2, h - 1)
     term.write("S=Source, D=Dest, T=Transfer, C=Config, Q=Quit")
-    term.setTextColor(colors.text)
+    term.setTextColor(uiColors.text)
 end
 
 local function drawInventoryView(chestType)
@@ -245,16 +245,16 @@ local function drawInventoryView(chestType)
         drawInventory(chestInfo, 5)
         
         term.setCursorPos(2, h - 3)
-        term.setTextColor(colors.highlight)
+        term.setTextColor(uiColors.highlight)
         term.write("Double-click item to extract | Up/Down arrows to scroll")
         term.setCursorPos(2, h - 2)
         term.write("B=Back | T=Transfer All | Q=Quit")
-        term.setTextColor(colors.text)
+        term.setTextColor(uiColors.text)
     else
         term.setCursorPos(2, 5)
-        term.setTextColor(colors.error)
+        term.setTextColor(uiColors.error)
         term.write("Error: " .. (error or "Unknown error"))
-        term.setTextColor(colors.text)
+        term.setTextColor(uiColors.text)
     end
     
     drawButton(2, h - 5, "Back to Main Menu", false)
@@ -266,7 +266,7 @@ local function showExtractionDialog(chestType, slot, item)
     local startX = math.floor((w - dialogW) / 2)
     local startY = math.floor((h - dialogH) / 2)
     
-    term.setBackgroundColor(colors.header)
+    term.setBackgroundColor(uiColors.header)
     for y = startY, startY + dialogH - 1 do
         term.setCursorPos(startX, y)
         term.write(string.rep(" ", dialogW))
@@ -294,8 +294,8 @@ local function showExtractionDialog(chestType, slot, item)
     local input = read()
     local amount = tonumber(input)
     
-    term.setBackgroundColor(colors.bg)
-    term.setTextColor(colors.text)
+    term.setBackgroundColor(uiColors.bg)
+    term.setTextColor(uiColors.text)
     
     if amount and amount > 0 and amount <= item.count then
         local sourceDir = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
@@ -309,10 +309,10 @@ local function showExtractionDialog(chestType, slot, item)
             
             term.setCursorPos(startX + 2, startY + 7)
             if transferred > 0 then
-                term.setTextColor(colors.success)
+                term.setTextColor(uiColors.success)
                 term.write("Transferred " .. transferred .. " items!")
             else
-                term.setTextColor(colors.error)
+                term.setTextColor(uiColors.error)
                 term.write("Transfer failed!")
             end
             
@@ -320,7 +320,7 @@ local function showExtractionDialog(chestType, slot, item)
         end
     elseif amount then
         term.setCursorPos(startX + 2, startY + 7)
-        term.setTextColor(colors.error)
+        term.setTextColor(uiColors.error)
         term.write("Invalid amount!")
         sleep(2)
     end
@@ -346,9 +346,9 @@ local function handleClick(x, y)
                     end
                     
                     term.setCursorPos(2, 19)
-                    term.setTextColor(colors.success)
+                    term.setTextColor(uiColors.success)
                     term.write("Transferred " .. transferred .. " items!")
-                    term.setTextColor(colors.text)
+                    term.setTextColor(uiColors.text)
                     sleep(2)
                 end
             end
@@ -414,9 +414,9 @@ local function handleKey(key)
                 end
                 
                 term.setCursorPos(2, h - 1)
-                term.setTextColor(colors.success)
+                term.setTextColor(uiColors.success)
                 term.write("Transferred " .. transferred .. " items!")
-                term.setTextColor(colors.text)
+                term.setTextColor(uiColors.text)
                 sleep(1)
             end
         end
@@ -485,8 +485,8 @@ local function runUI()
     end
 end
 
-term.setBackgroundColor(colors.bg)
-term.setTextColor(colors.text)
+term.setBackgroundColor(uiColors.bg)
+term.setTextColor(uiColors.text)
 clearScreen()
 
 print("Starting Chest Transfer UI...")

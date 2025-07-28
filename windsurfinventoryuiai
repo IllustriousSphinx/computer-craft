@@ -4,7 +4,6 @@
 -- - Double-click to extract items with amount selection
 -- - Real-time inventory scanning
 -- - Configurable output chest
--- - Crafting interface
 
 -- Configuration
 local config = {
@@ -22,6 +21,8 @@ local scrollOffset = 0
 local lastScanTime = 0
 local lastClickTime = 0
 local lastClickIndex = 0
+local statusMessage = ""
+local statusColor = colors.white
 
 -- UI Constants
 local W, H = term.getSize()
@@ -35,7 +36,8 @@ local colors = {
     highlight = colors.blue,
     selected = colors.lightBlue,
     warning = colors.red,
-    success = colors.green
+    success = colors.green,
+    orange = colors.orange
 }
 
 -- Initialize peripherals
@@ -62,22 +64,24 @@ local function scanInventories()
     local chests = initPeripherals()
     
     for _, chest in ipairs(chests) do
-        local items = chest.peripheral.list()
-        for slot, item in pairs(items) do
-            if not foundItems[item.name] then
-                foundItems[item.name] = {
-                    name = item.name,
-                    displayName = item.displayName or item.name:gsub("minecraft:", ""),
-                    count = item.count,
-                    locations = {{chest = chest.name, slot = slot, count = item.count}}
-                }
-            else
-                foundItems[item.name].count = foundItems[item.name].count + item.count
-                table.insert(foundItems[item.name].locations, {
-                    chest = chest.name,
-                    slot = slot,
-                    count = item.count
-                })
+        local success, items = pcall(function() return chest.peripheral.list() end)
+        if success and items then
+            for slot, item in pairs(items) do
+                if not foundItems[item.name] then
+                    foundItems[item.name] = {
+                        name = item.name,
+                        displayName = item.displayName or item.name:gsub("minecraft:", ""),
+                        count = item.count,
+                        locations = {{chest = chest.name, slot = slot, count = item.count}}
+                    }
+                else
+                    foundItems[item.name].count = foundItems[item.name].count + item.count
+                    table.insert(foundItems[item.name].locations, {
+                        chest = chest.name,
+                        slot = slot,
+                        count = item.count
+                    })
+                end
             end
         end
     end
@@ -97,6 +101,222 @@ local function scanInventories()
     end)
     
     return itemArray
+end
+
+-- Function to extract items from source to output chest
+local function extractItems(item, amount)
+    local remaining = amount
+    local outputChest = peripheral.wrap(config.outputChest)
+    
+    if not outputChest then
+        showStatus("Error: Output chest not found!", colors.red)
+        return
+    end
+    
+    -- Sort locations by largest stack first
+    table.sort(item.locations, function(a, b) return a.count > b.count end)
+    
+    for _, location in ipairs(item.locations) do
+        if remaining <= 0 then break end
+        
+        local chest = peripheral.wrap(location.chest)
+        if chest then
+            local toTransfer = math.min(remaining, location.count)
+            local success, transferred = pcall(function()
+                return chest.pushItems(peripheral.getName(outputChest), location.slot, toTransfer)
+            end)
+            
+            if success and transferred > 0 then
+                remaining = remaining - transferred
+                -- Update the location count
+                location.count = location.count - transferred
+                -- Update the total count
+                item.count = item.count - transferred
+            end
+        end
+    end
+    
+    -- Remove locations with 0 items
+    for i = #item.locations, 1, -1 do
+        if item.locations[i].count <= 0 then
+            table.remove(item.locations, i)
+        end
+    end
+    
+    -- Update filtered items
+    if item.count <= 0 then
+        for i, filteredItem in ipairs(filteredItems) do
+            if filteredItem.name == item.name then
+                table.remove(filteredItems, i)
+                break
+            end
+        end
+    end
+    
+    if remaining < amount then
+        local moved = amount - remaining
+        showStatus(string.format("Moved %dx %s to output", moved, item.displayName), colors.green)
+    end
+    
+    if remaining > 0 then
+        showStatus(string.format("Could only move %d/%d items", amount - remaining, amount), colors.orange)
+    end
+end
+
+-- Show status message
+local function showStatus(message, color)
+    statusMessage = message
+    statusColor = color or colors.white
+end
+
+-- Show item extraction dialog
+local function showExtractDialog(item)
+    local dialogW, dialogH = 40, 10
+    local x, y = math.floor((W - dialogW) / 2), math.floor((H - dialogH) / 2)
+    local amount = 1
+    local maxAmount = item.count
+    local inputActive = true
+    local inputBuffer = ""
+    
+    -- Helper function to redraw the dialog
+    local function redrawDialog()
+        -- Dialog background
+        paintutils.drawFilledBox(x, y, x + dialogW - 1, y + dialogH - 1, colors.lightGray)
+        paintutils.drawBox(x, y, x + dialogW - 1, y + dialogH - 1, colors.black)
+        
+        -- Title
+        term.setCursorPos(x + 2, y + 1)
+        term.setTextColor(colors.black)
+        term.write("Extract Items")
+        
+        -- Item info
+        term.setCursorPos(x + 2, y + 3)
+        term.write(string.format("Item: %s", item.displayName))
+        term.setCursorPos(x + 2, y + 4)
+        term.write(string.format("Available: %d", maxAmount))
+        
+        -- Amount input
+        term.setCursorPos(x + 2, y + 6)
+        term.write("Amount: [")
+        
+        -- Input field
+        local inputX = x + 11
+        term.setCursorPos(inputX, y + 6)
+        if inputActive then
+            term.setBackgroundColor(colors.white)
+            term.setTextColor(colors.black)
+        else
+            term.setBackgroundColor(colors.lightGray)
+            term.setTextColor(colors.black)
+        end
+        term.write((" "):rep(10))
+        
+        term.setCursorPos(inputX, y + 6)
+        term.write(inputBuffer ~= "" and inputBuffer or tostring(amount))
+        
+        term.setBackgroundColor(colors.lightGray)
+        term.setTextColor(colors.black)
+        term.write("]")
+        
+        -- Buttons
+        local extractBtnX = x + 5
+        local cancelBtnX = x + 20
+        local btnY = y + dialogH - 3
+        
+        paintutils.drawBox(extractBtnX, btnY, extractBtnX + 10, btnY + 1, colors.black)
+        term.setCursorPos(extractBtnX + 2, btnY)
+        term.write("Extract")
+        
+        paintutils.drawBox(cancelBtnX, btnY, cancelBtnX + 10, btnY + 1, colors.black)
+        term.setCursorPos(cancelBtnX + 2, btnY)
+        term.write("Cancel")
+        
+        -- Quick amount buttons
+        local quickBtns = {1, 16, 32, 64}
+        for i, qty in ipairs(quickBtns) do
+            local btnX = x + 5 + (i-1)*8
+            if qty <= maxAmount then
+                paintutils.drawBox(btnX, y + 8, btnX + 6, y + 9, colors.black)
+                term.setCursorPos(btnX + 1, y + 8)
+                term.write("x" .. qty)
+            end
+        end
+    end
+    
+    -- Input loop
+    while true do
+        redrawDialog()
+        
+        local event, key, clickX, clickY = os.pullEvent()
+        
+        if event == "key" then
+            if inputActive then
+                if key == keys.enter then
+                    -- Parse input
+                    if inputBuffer ~= "" then
+                        local num = tonumber(inputBuffer)
+                        if num and num > 0 and num <= maxAmount then
+                            amount = num
+                            inputBuffer = tostring(amount)
+                        end
+                    end
+                    inputActive = false
+                elseif key == keys.backspace then
+                    inputBuffer = inputBuffer:sub(1, -2)
+                else
+                    -- Handle number input
+                    local char = keys.getName(key)
+                    if char:match("^%d$") then
+                        inputBuffer = inputBuffer .. char
+                        local num = tonumber(inputBuffer)
+                        if num and num > maxAmount then
+                            inputBuffer = tostring(maxAmount)
+                        end
+                    end
+                end
+            else
+                if key == keys.enter then
+                    -- Extract with current amount
+                    extractItems(item, amount)
+                    return
+                elseif key == keys.tab then
+                    inputActive = not inputActive
+                end
+            end
+        elseif event == "mouse_click" then
+            -- Check if click is within dialog
+            if clickX >= x and clickX <= x + dialogW - 1 and
+               clickY >= y and clickY <= y + dialogH - 1 then
+               
+                -- Check amount input field
+                if clickY == y + 6 and clickX >= x + 11 and clickX <= x + 21 then
+                    inputActive = true
+                -- Check Extract button
+                elseif clickY >= y + dialogH - 3 and clickY <= y + dialogH - 2 and
+                       clickX >= x + 5 and clickX <= x + 15 then
+                    extractItems(item, amount)
+                    return
+                -- Check Cancel button
+                elseif clickY >= y + dialogH - 3 and clickY <= y + dialogH - 2 and
+                       clickX >= x + 20 and clickX <= x + 30 then
+                    return -- Close dialog without extracting
+                -- Check quick amount buttons
+                elseif clickY == y + 8 or clickY == y + 9 then
+                    local quickBtns = {1, 16, 32, 64}
+                    for i, qty in ipairs(quickBtns) do
+                        local btnX = x + 5 + (i-1)*8
+                        if clickX >= btnX and clickX <= btnX + 6 and qty <= maxAmount then
+                            amount = qty
+                            inputBuffer = tostring(amount)
+                            break
+                        end
+                    end
+                end
+            else
+                return -- Clicked outside dialog
+            end
+        end
+    end
 end
 
 -- Draw the main inventory UI
@@ -145,6 +365,15 @@ local function drawUI()
         term.write("↓")
     end
     
+    -- Status bar
+    if statusMessage ~= "" then
+        term.setBackgroundColor(colors.background)
+        term.setTextColor(statusColor)
+        term.setCursorPos(1, H)
+        term.clearLine()
+        term.write(" " .. statusMessage)
+    end
+    
     -- Footer
     term.setBackgroundColor(colors.background)
     term.setTextColor(colors.text)
@@ -153,51 +382,21 @@ local function drawUI()
     term.write("↑/↓: Navigate | Enter: Select | F5: Refresh | Q: Quit")
 end
 
--- Show item extraction dialog
-local function showExtractDialog(item)
-    local dialogW, dialogH = 40, 8
-    local x, y = math.floor((W - dialogW) / 2), math.floor((H - dialogH) / 2)
-    
-    -- Dialog background
-    paintutils.drawFilledBox(x, y, x + dialogW - 1, y + dialogH - 1, colors.lightGray)
-    paintutils.drawBox(x, y, x + dialogW - 1, y + dialogH - 1, colors.black)
-    
-    -- Title
-    term.setCursorPos(x + 2, y + 1)
-    term.setTextColor(colors.black)
-    term.write("Extract Items")
-    
-    -- Item info
-    term.setCursorPos(x + 2, y + 3)
-    term.write(string.format("Item: %s", item.displayName))
-    term.setCursorPos(x + 2, y + 4)
-    term.write(string.format("Available: %d", item.count))
-    
-    -- Amount input
-    term.setCursorPos(x + 2, y + 6)
-    term.write("Amount: [        ]")
-    
-    -- Buttons
-    paintutils.drawBox(x + 5, y + dialogH - 3, x + 15, y + dialogH - 2, colors.black)
-    term.setCursorPos(x + 7, y + dialogH - 3)
-    term.write("Extract")
-    
-    paintutils.drawBox(x + 20, y + dialogH - 3, x + 30, y + dialogH - 2, colors.black)
-    term.setCursorPos(x + 23, y + dialogH - 3)
-    term.write("Cancel")
-    
-    -- TODO: Implement amount input and extraction logic
-end
-
 -- Main loop
 local function main()
-    local running = true
+    -- Initial scan
+    filteredItems = scanInventories()
     
-    while running do
+    while true do
         local currentTime = os.clock()
         if currentTime - lastScanTime > config.scanInterval then
             filteredItems = scanInventories()
             lastScanTime = currentTime
+            
+            -- Reset selection if needed
+            if selectedIndex > #filteredItems and #filteredItems > 0 then
+                selectedIndex = #filteredItems
+            end
         end
         
         drawUI()
@@ -219,8 +418,9 @@ local function main()
                 showExtractDialog(filteredItems[selectedIndex])
             elseif key == keys.f5 then
                 filteredItems = scanInventories()
+                showStatus("Inventory rescanned", colors.green)
             elseif key == keys.q then
-                running = false
+                break
             end
         elseif event == "mouse_click" then
             -- Handle mouse clicks for item selection
@@ -244,9 +444,9 @@ local function main()
     term.setBackgroundColor(colors.black)
     term.clear()
     term.setCursorPos(1, 1)
+    print("Inventory system closed.")
 end
 
--- Initialize and run
+-- Start the application
 term.clear()
-filteredItems = scanInventories()
 main()

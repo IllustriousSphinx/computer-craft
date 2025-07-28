@@ -1,6 +1,6 @@
 -- ComputerCraft Chest Transfer UI
 -- Multi-Source to Single Destination Transfer System
--- Supports both direct connections and wired modems
+-- Enhanced wired modem support with debugging
 
 -- Load configuration
 local config = {}
@@ -17,15 +17,16 @@ end
 -- Configuration
 local DEST_DIRECTION = config.dest or "right"
 local DEST_NAME = config.destName or nil
-local SOURCE_NAMES = config.sourceNames or {}  -- List of source chest names
+local SOURCE_NAMES = config.sourceNames or {}
 local AUTO_DISCOVER = config.autoDiscover or true
 
 -- UI State
-local currentView = "main" -- main, sources, dest, extract
+local currentView = "main" -- main, sources, dest, extract, debug
 local selectedSourceIndex = 1
 local scrollOffset = 0
 local maxDisplayItems = 10
 local sourceChests = {}
+local debugInfo = {}
 
 -- Color definitions
 local BLACK = 32768
@@ -40,92 +41,207 @@ local ORANGE = 16
 -- Get terminal dimensions
 local w, h = term.getSize()
 
--- Function to find all chest-like peripherals
-local function findAllChests()
+-- Function to log debug information
+local function addDebugInfo(message)
+    table.insert(debugInfo, os.date("[%H:%M:%S] ") .. message)
+    if #debugInfo > 50 then
+        table.remove(debugInfo, 1)
+    end
+end
+
+-- Enhanced function to find all peripherals with detailed info
+local function findAllPeripherals()
+    addDebugInfo("Starting peripheral scan...")
     local peripherals = peripheral.getNames()
-    local chests = {}
+    local allPeripherals = {}
+    local chestPeripherals = {}
+    
+    addDebugInfo("Found " .. #peripherals .. " total peripherals")
     
     for _, name in pairs(peripherals) do
         local pType = peripheral.getType(name)
+        addDebugInfo("Checking: " .. name .. " (type: " .. pType .. ")")
         
-        -- Check if it's a chest-like inventory
-        if pType == "minecraft:chest" or 
-           pType == "minecraft:trapped_chest" or
-           pType == "minecraft:barrel" or
-           pType == "minecraft:shulker_box" or
-           string.find(pType, "chest") or
-           string.find(pType, "barrel") then
-            
+        table.insert(allPeripherals, {
+            name = name,
+            type = pType,
+            isChest = false
+        })
+        
+        -- More comprehensive chest detection
+        local isChestLike = false
+        local chestTypes = {
+            "minecraft:chest",
+            "minecraft:trapped_chest", 
+            "minecraft:barrel",
+            "minecraft:shulker_box",
+            "minecraft:ender_chest",
+            "chest",
+            "barrel",
+            "ironchest"  -- Iron Chests mod support
+        }
+        
+        for _, chestType in ipairs(chestTypes) do
+            if pType == chestType or string.find(pType:lower(), chestType) then
+                isChestLike = true
+                break
+            end
+        end
+        
+        if isChestLike then
+            addDebugInfo("Attempting to wrap chest: " .. name)
             local chest = peripheral.wrap(name)
-            if chest and chest.list then
-                table.insert(chests, {
-                    name = name,
-                    type = pType,
-                    peripheral = chest
-                })
+            
+            if chest then
+                addDebugInfo("Successfully wrapped: " .. name)
+                
+                -- Test if it has inventory methods
+                local hasListMethod = chest.list ~= nil
+                local hasSize = chest.size ~= nil
+                
+                addDebugInfo("Methods - list: " .. tostring(hasListMethod) .. ", size: " .. tostring(hasSize))
+                
+                if hasListMethod then
+                    -- Try to call list() to make sure it works
+                    local success, result = pcall(function() return chest.list() end)
+                    if success then
+                        addDebugInfo("Successfully tested list() on: " .. name)
+                        table.insert(chestPeripherals, {
+                            name = name,
+                            type = pType,
+                            peripheral = chest,
+                            itemCount = 0,
+                            totalItems = 0
+                        })
+                        allPeripherals[#allPeripherals].isChest = true
+                    else
+                        addDebugInfo("Failed to call list() on: " .. name .. " - " .. tostring(result))
+                    end
+                else
+                    addDebugInfo("No list() method on: " .. name)
+                end
+            else
+                addDebugInfo("Failed to wrap: " .. name)
             end
         end
     end
     
-    return chests
+    addDebugInfo("Found " .. #chestPeripherals .. " working chest peripherals")
+    return chestPeripherals, allPeripherals
 end
 
--- Function to get destination chest
+-- Function to get destination chest with better error handling
 local function getDestChest()
+    addDebugInfo("Looking for destination chest...")
+    
     -- Try by specific name first
     if DEST_NAME then
+        addDebugInfo("Trying destination by name: " .. DEST_NAME)
         local chest = peripheral.wrap(DEST_NAME)
         if chest and chest.list then
-            return chest, DEST_NAME, "wired"
+            local success, result = pcall(function() return chest.list() end)
+            if success then
+                addDebugInfo("Found destination chest by name: " .. DEST_NAME)
+                return chest, DEST_NAME, "wired"
+            else
+                addDebugInfo("Destination chest found but list() failed: " .. tostring(result))
+            end
+        else
+            addDebugInfo("Could not wrap destination: " .. DEST_NAME)
         end
     end
     
     -- Try direct connection
+    addDebugInfo("Trying destination by direction: " .. DEST_DIRECTION)
     local chest = peripheral.wrap(DEST_DIRECTION)
     if chest and chest.list then
-        return chest, DEST_DIRECTION, "direct"
+        local success, result = pcall(function() return chest.list() end)
+        if success then
+            addDebugInfo("Found destination chest by direction: " .. DEST_DIRECTION)
+            return chest, DEST_DIRECTION, "direct"
+        else
+            addDebugInfo("Direct chest found but list() failed: " .. tostring(result))
+        end
+    else
+        addDebugInfo("No chest found at direction: " .. DEST_DIRECTION)
     end
     
+    addDebugInfo("No destination chest found!")
     return nil, nil, "none"
 end
 
--- Function to initialize source chests
+-- Function to initialize source chests with better detection
 local function initializeSourceChests()
+    addDebugInfo("Initializing source chests...")
     sourceChests = {}
     
     if AUTO_DISCOVER then
-        -- Auto-discover all chests except destination
-        local allChests = findAllChests()
+        addDebugInfo("Auto-discovery mode enabled")
+        local allChests, allPeripherals = findAllPeripherals()
         local destChest, destId = getDestChest()
+        
+        addDebugInfo("Destination ID: " .. tostring(destId))
         
         for _, chestInfo in ipairs(allChests) do
             -- Don't include the destination chest as a source
             if chestInfo.name ~= destId then
+                addDebugInfo("Adding source chest: " .. chestInfo.name)
+                
+                -- Get initial item count
+                local success, items = pcall(function() return chestInfo.peripheral.list() end)
+                if success and items then
+                    local itemCount = 0
+                    local totalItems = 0
+                    for slot, item in pairs(items) do
+                        itemCount = itemCount + 1
+                        totalItems = totalItems + item.count
+                    end
+                    chestInfo.itemCount = itemCount
+                    chestInfo.totalItems = totalItems
+                end
+                
                 table.insert(sourceChests, {
                     name = chestInfo.name,
                     type = chestInfo.type,
                     peripheral = chestInfo.peripheral,
-                    enabled = true
+                    enabled = true,
+                    itemCount = chestInfo.itemCount or 0,
+                    totalItems = chestInfo.totalItems or 0
                 })
+            else
+                addDebugInfo("Skipping destination chest as source: " .. chestInfo.name)
             end
         end
     else
-        -- Use configured source names
+        addDebugInfo("Manual source configuration mode")
         for _, sourceName in ipairs(SOURCE_NAMES) do
+            addDebugInfo("Trying manual source: " .. sourceName)
             local chest = peripheral.wrap(sourceName)
             if chest and chest.list then
-                table.insert(sourceChests, {
-                    name = sourceName,
-                    type = peripheral.getType(sourceName),
-                    peripheral = chest,
-                    enabled = true
-                })
+                local success, result = pcall(function() return chest.list() end)
+                if success then
+                    addDebugInfo("Successfully added manual source: " .. sourceName)
+                    table.insert(sourceChests, {
+                        name = sourceName,
+                        type = peripheral.getType(sourceName),
+                        peripheral = chest,
+                        enabled = true,
+                        itemCount = 0,
+                        totalItems = 0
+                    })
+                else
+                    addDebugInfo("Manual source failed list() test: " .. sourceName)
+                end
+            else
+                addDebugInfo("Could not wrap manual source: " .. sourceName)
             end
         end
     end
+    
+    addDebugInfo("Initialization complete. Found " .. #sourceChests .. " source chests")
 end
 
--- Function to get chest info
+-- Function to get chest info with error handling
 local function getChestInfo(chest, chestName)
     if not chest then
         return nil, "No chest connected"
@@ -133,7 +249,8 @@ local function getChestInfo(chest, chestName)
     
     local success, items = pcall(function() return chest.list() end)
     if not success then
-        return nil, "Failed to read chest inventory"
+        addDebugInfo("Failed to read inventory from: " .. tostring(chestName) .. " - " .. tostring(items))
+        return nil, "Failed to read chest inventory: " .. tostring(items)
     end
     
     local itemCount = 0
@@ -209,6 +326,31 @@ local function drawButton(x, y, text, selected)
     term.setTextColor(WHITE)
 end
 
+-- Function to draw debug view
+local function drawDebugView()
+    clearScreen()
+    drawHeader("Debug Information")
+    
+    term.setCursorPos(2, 3)
+    term.write("Recent debug messages:")
+    
+    local startIndex = math.max(1, #debugInfo - (h - 6))
+    for i = startIndex, #debugInfo do
+        local y = 4 + (i - startIndex)
+        if y < h - 2 then
+            term.setCursorPos(2, y)
+            term.setTextColor(WHITE)
+            local message = debugInfo[i]
+            if #message > w - 3 then
+                message = message:sub(1, w - 6) .. "..."
+            end
+            term.write(message)
+        end
+    end
+    
+    drawButton(2, h - 2, "Back to Main Menu", false)
+end
+
 -- Function to draw main menu
 local function drawMainMenu()
     clearScreen()
@@ -235,7 +377,7 @@ local function drawMainMenu()
         end
     else
         term.setTextColor(RED)
-        term.write("Not connected - Check configuration")
+        term.write("Not connected - Check configuration or wiring")
     end
     
     -- Display source chests summary
@@ -243,38 +385,48 @@ local function drawMainMenu()
     term.setTextColor(WHITE)
     term.write("Source Chests: " .. #sourceChests .. " found")
     
-    local enabledCount = 0
-    local totalSourceItems = 0
-    for _, source in ipairs(sourceChests) do
-        if source.enabled then
-            enabledCount = enabledCount + 1
-            local info = getChestInfo(source.peripheral, source.name)
-            if info then
-                totalSourceItems = totalSourceItems + info.totalItems
+    if #sourceChests == 0 then
+        term.setCursorPos(4, 7)
+        term.setTextColor(RED)
+        term.write("No source chests detected! Check wired connections.")
+        term.setCursorPos(4, 8)
+        term.setTextColor(YELLOW)
+        term.write("Try: View Debug Info or Refresh/Scan")
+    else
+        local enabledCount = 0
+        local totalSourceItems = 0
+        for _, source in ipairs(sourceChests) do
+            if source.enabled then
+                enabledCount = enabledCount + 1
+                local info = getChestInfo(source.peripheral, source.name)
+                if info then
+                    totalSourceItems = totalSourceItems + info.totalItems
+                end
             end
         end
+        
+        term.setCursorPos(4, 7)
+        term.setTextColor(LIME)
+        term.write(enabledCount .. " enabled, " .. totalSourceItems .. " total items to transfer")
     end
-    
-    term.setCursorPos(4, 7)
-    term.setTextColor(LIME)
-    term.write(enabledCount .. " enabled, " .. totalSourceItems .. " total items to transfer")
     
     term.setTextColor(WHITE)
     
     -- Draw buttons
-    drawButton(2, 9, "View Source Chests", false)
-    drawButton(2, 11, "View Destination", false)
-    drawButton(2, 13, "Transfer All Items", false)
-    drawButton(2, 15, "Refresh/Scan", false)
-    drawButton(2, 17, "Configure Settings", false)
-    drawButton(2, 19, "Exit", false)
+    drawButton(2, 10, "View Source Chests", false)
+    drawButton(2, 12, "View Destination", false)
+    drawButton(2, 14, "Transfer All Items", false)
+    drawButton(2, 16, "Refresh/Scan", false)
+    drawButton(2, 18, "View Debug Info", false)
+    drawButton(2, 20, "Configure Settings", false)
+    drawButton(2, 22, "Exit", false)
     
     -- Instructions
     term.setCursorPos(2, h - 2)
     term.setTextColor(YELLOW)
     term.write("Multi-source transfer: All enabled sources -> Destination")
     term.setCursorPos(2, h - 1)
-    term.write("S=Sources, D=Dest, T=Transfer, R=Refresh, C=Config, Q=Quit")
+    term.write("S=Sources, D=Dest, T=Transfer, R=Refresh, G=Debug, C=Config, Q=Quit")
     term.setTextColor(WHITE)
 end
 
@@ -289,7 +441,16 @@ local function drawSourcesView()
         term.write("No source chests found!")
         term.setCursorPos(2, 6)
         term.setTextColor(WHITE)
-        term.write("Try refreshing or check your wired connections.")
+        term.write("Possible issues:")
+        term.setCursorPos(4, 7)
+        term.write("- Wired modems not connected properly")
+        term.setCursorPos(4, 8)
+        term.write("- Chests not connected to wired network")
+        term.setCursorPos(4, 9)
+        term.write("- Check debug info for details")
+        
+        drawButton(2, h - 4, "View Debug Info", false)
+        drawButton(2, h - 2, "Back to Main Menu", false)
         return
     end
     
@@ -319,8 +480,8 @@ local function drawSourcesView()
             -- Chest name and type
             term.setTextColor(WHITE)
             local displayName = source.name
-            if #displayName > 20 then
-                displayName = displayName:sub(1, 17) .. "..."
+            if #displayName > 25 then
+                displayName = displayName:sub(1, 22) .. "..."
             end
             term.write(displayName)
             
@@ -330,6 +491,10 @@ local function drawSourcesView()
                 term.setCursorPos(w - 15, y)
                 term.setTextColor(YELLOW)
                 term.write(info.totalItems .. " items")
+            else
+                term.setCursorPos(w - 15, y)
+                term.setTextColor(RED)
+                term.write("ERROR")
             end
             
             term.setTextColor(WHITE)
@@ -416,30 +581,51 @@ end
 
 -- Function to transfer all items from all enabled sources
 local function transferAllItems()
+    addDebugInfo("Starting transfer operation...")
     local destChest, destId = getDestChest()
     if not destChest then
+        addDebugInfo("Transfer failed: No destination chest")
         return 0, "Destination chest not found"
     end
     
+    addDebugInfo("Destination: " .. destId)
     local totalTransferred = 0
     local errors = {}
     
     for i, source in ipairs(sourceChests) do
         if source.enabled then
+            addDebugInfo("Transferring from: " .. source.name)
             local sourceInfo = getChestInfo(source.peripheral, source.name)
             if sourceInfo then
                 for slot, item in pairs(sourceInfo.items) do
-                    local transferred = source.peripheral.pushItems(destId, slot)
-                    totalTransferred = totalTransferred + transferred
+                    local success, transferred = pcall(function()
+                        return source.peripheral.pushItems(destId, slot)
+                    end)
                     
-                    if transferred == 0 and item.count > 0 then
-                        table.insert(errors, "Failed to transfer " .. item.name .. " from " .. source.name)
+                    if success then
+                        totalTransferred = totalTransferred + transferred
+                        if transferred > 0 then
+                            addDebugInfo("Transferred " .. transferred .. "x " .. item.name .. " from slot " .. slot)
+                        elseif item.count > 0 then
+                            local errorMsg = "Failed to transfer " .. item.name .. " from " .. source.name
+                            table.insert(errors, errorMsg)
+                            addDebugInfo(errorMsg)
+                        end
+                    else
+                        local errorMsg = "Error transferring from " .. source.name .. ": " .. tostring(transferred)
+                        table.insert(errors, errorMsg)
+                        addDebugInfo(errorMsg)
                     end
                 end
+            else
+                local errorMsg = "Could not read inventory from " .. source.name
+                table.insert(errors, errorMsg)
+                addDebugInfo(errorMsg)
             end
         end
     end
     
+    addDebugInfo("Transfer complete. Total items: " .. totalTransferred)
     return totalTransferred, errors
 end
 
@@ -465,12 +651,16 @@ local function showTransferProgress()
     if type(errors) == "table" and #errors > 0 then
         term.setCursorPos(2, 9)
         term.setTextColor(YELLOW)
-        term.write("Warnings:")
+        term.write("Issues encountered:")
         for i, error in ipairs(errors) do
             if i <= 5 then -- Show max 5 errors
                 term.setCursorPos(4, 9 + i)
                 term.setTextColor(ORANGE)
-                term.write(error)
+                local errorMsg = error
+                if #errorMsg > w - 6 then
+                    errorMsg = errorMsg:sub(1, w - 9) .. "..."
+                end
+                term.write(errorMsg)
             end
         end
         if #errors > 5 then
@@ -488,19 +678,22 @@ end
 -- Function to handle mouse clicks
 local function handleClick(x, y)
     if currentView == "main" then
-        if y == 9 and x >= 2 and x <= 20 then -- View Sources
+        if y == 10 and x >= 2 and x <= 20 then -- View Sources
             currentView = "sources"
             scrollOffset = 0
-        elseif y == 11 and x >= 2 and x <= 18 then -- View Destination
+        elseif y == 12 and x >= 2 and x <= 18 then -- View Destination
             currentView = "dest"
-        elseif y == 13 and x >= 2 and x <= 20 then -- Transfer All
+        elseif y == 14 and x >= 2 and x <= 20 then -- Transfer All
             showTransferProgress()
-        elseif y == 15 and x >= 2 and x <= 15 then -- Refresh
+        elseif y == 16 and x >= 2 and x <= 15 then -- Refresh
             sourceChests = {}
+            debugInfo = {}
             initializeSourceChests()
-        elseif y == 17 and x >= 2 and x <= 20 then -- Configure
+        elseif y == 18 and x >= 2 and x <= 17 then -- Debug Info
+            currentView = "debug"
+        elseif y == 20 and x >= 2 and x <= 20 then -- Configure
             shell.run("edit", "chest_config.lua")
-        elseif y == 19 and x >= 2 and x <= 8 then -- Exit
+        elseif y == 22 and x >= 2 and x <= 8 then -- Exit
             return false
         end
     elseif currentView == "sources" then
@@ -510,12 +703,20 @@ local function handleClick(x, y)
             if sourceIndex <= #sourceChests then
                 -- Toggle enabled status
                 sourceChests[sourceIndex].enabled = not sourceChests[sourceIndex].enabled
+                addDebugInfo("Toggled " .. sourceChests[sourceIndex].name .. " to " .. 
+                           (sourceChests[sourceIndex].enabled and "enabled" or "disabled"))
             end
+        elseif y == h - 4 and x >= 2 and x <= 17 then -- Debug button
+            currentView = "debug"
         elseif y == h - 5 and x >= 2 and x <= 20 then -- Back button
             currentView = "main"
         end
     elseif currentView == "dest" then
         if y == h - 3 and x >= 2 and x <= 20 then -- Back button
+            currentView = "main"
+        end
+    elseif currentView == "debug" then
+        if y == h - 2 and x >= 2 and x <= 20 then -- Back button
             currentView = "main"
         end
     end
@@ -534,23 +735,28 @@ local function handleKey(key)
         scrollOffset = 0
     elseif key == keys.d and currentView == "main" then
         currentView = "dest"
+    elseif key == keys.g and currentView == "main" then
+        currentView = "debug"
     elseif key == keys.r and currentView == "main" then
         sourceChests = {}
+        debugInfo = {}
         initializeSourceChests()
     elseif key == keys.t then
         showTransferProgress()
     elseif key == keys.up and currentView == "sources" then
         scrollOffset = math.max(0, scrollOffset - 1)
     elseif key == keys.down and currentView == "sources" then
-        scrollOffset = math.min(#sourceChests - maxDisplayItems, scrollOffset + 1)
+        scrollOffset = math.min(math.max(0, #sourceChests - maxDisplayItems), scrollOffset + 1)
     elseif key == keys.a and currentView == "sources" then -- Enable all
         for _, source in ipairs(sourceChests) do
             source.enabled = true
         end
+        addDebugInfo("Enabled all source chests")
     elseif key == keys.n and currentView == "sources" then -- Disable all
         for _, source in ipairs(sourceChests) do
             source.enabled = false
         end
+        addDebugInfo("Disabled all source chests")
     end
     
     return true
@@ -565,6 +771,8 @@ local function runUI()
             drawSourcesView()
         elseif currentView == "dest" then
             drawDestView()
+        elseif currentView == "debug" then
+            drawDebugView()
         end
         
         local event, button, x, y = os.pullEvent()
@@ -587,6 +795,8 @@ term.setTextColor(WHITE)
 clearScreen()
 
 print("Starting Multi-Source Chest Transfer System...")
+print("Initializing debug logging...")
+addDebugInfo("System starting up...")
 sleep(1)
 
 runUI()

@@ -10,7 +10,7 @@ local config = {
     scanInterval = 5, -- seconds between scans
     outputChest = "top", -- default output direction
     sortMethod = "count", -- count or name
-    debug = false
+    debug = true  -- Enable debug output
 }
 
 -- State
@@ -40,21 +40,47 @@ local colors = {
     orange = colors.orange
 }
 
--- Initialize peripherals
+-- Initialize peripherals with better detection
 local function initPeripherals()
     local peripherals = peripheral.getNames()
     local chests = {}
     
+    print("Scanning for peripherals...")
+    
     for _, name in ipairs(peripherals) do
-        local pType = peripheral.getType(name)
-        if pType == "minecraft:chest" or pType == "minecraft:barrel" or pType == "chest" then
-            table.insert(chests, {
-                name = name,
-                peripheral = peripheral.wrap(name)
-            })
+        local success, pType = pcall(peripheral.getType, name)
+        if not success then
+            print("Error getting type for " .. tostring(name) .. ": " .. tostring(pType))
+        else
+            print("Found " .. name .. " (type: " .. tostring(pType) .. ")")
+            
+            -- Check for inventory-like peripherals
+            local isInventory = false
+            local wrapped = peripheral.wrap(name)
+            
+            -- Check if it has inventory methods
+            if wrapped and wrapped.list and wrapped.size then
+                isInventory = true
+            -- Check common inventory types
+            elseif pType:find("chest") or pType:find("barrel") or pType:find("inventory") then
+                isInventory = true
+            -- Check for modded inventories
+            elseif pType:find("tile.") and (pType:find("chest") or pType:find("barrel") or pType:find("inventory")) then
+                isInventory = true
+            end
+            
+            if isInventory then
+                print("  - Added as inventory")
+                table.insert(chests, {
+                    name = name,
+                    type = pType,
+                    peripheral = wrapped
+                })
+            end
         end
     end
     
+    print("Found " .. #chests .. " inventory peripherals")
     return chests
 end
 
@@ -62,6 +88,16 @@ end
 local function scanInventories()
     local foundItems = {}
     local chests = initPeripherals()
+    
+    if #chests == 0 then
+        print("Warning: No inventory peripherals found!")
+        print("Make sure to connect chests with wired modems or place them adjacent to the computer.")
+        print("Connected peripherals:")
+        local allPeripherals = peripheral.getNames()
+        for _, name in ipairs(allPeripherals) do
+            print("- " .. name .. " (" .. peripheral.getType(name) .. ")")
+        end
+    end
     
     for _, chest in ipairs(chests) do
         local success, items = pcall(function() return chest.peripheral.list() end)

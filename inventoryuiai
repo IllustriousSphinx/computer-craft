@@ -1,6 +1,6 @@
 -- ComputerCraft Chest Transfer UI
--- Advanced UI for viewing and managing chest inventories
--- Now supports wired modems!
+-- Multi-Source to Single Destination Transfer System
+-- Supports both direct connections and wired modems
 
 -- Load configuration
 local config = {}
@@ -15,17 +15,19 @@ if fs.exists("chest_config.lua") then
 end
 
 -- Configuration
-local SOURCE_DIRECTION = config.source or "left"
 local DEST_DIRECTION = config.dest or "right"
-local SOURCE_NAME = config.sourceName or nil  -- For wired modems
-local DEST_NAME = config.destName or nil      -- For wired modems
+local DEST_NAME = config.destName or nil
+local SOURCE_NAMES = config.sourceNames or {}  -- List of source chest names
+local AUTO_DISCOVER = config.autoDiscover or true
 
 -- UI State
-local currentView = "main" -- main, source, dest, extract
+local currentView = "main" -- main, sources, dest, extract
+local selectedSourceIndex = 1
 local scrollOffset = 0
-local maxDisplayItems = 12
+local maxDisplayItems = 10
+local sourceChests = {}
 
--- Color definitions (using numeric values to avoid conflicts)
+-- Color definitions
 local BLACK = 32768
 local BLUE = 2048
 local WHITE = 1
@@ -33,19 +35,18 @@ local YELLOW = 4
 local GREEN = 8192
 local RED = 16384
 local LIME = 8
+local ORANGE = 16
 
 -- Get terminal dimensions
 local w, h = term.getSize()
 
--- Function to find all connected peripherals
-local function findPeripherals()
+-- Function to find all chest-like peripherals
+local function findAllChests()
     local peripherals = peripheral.getNames()
     local chests = {}
     
-    print("Scanning for peripherals...")
     for _, name in pairs(peripherals) do
         local pType = peripheral.getType(name)
-        print("Found: " .. name .. " (" .. pType .. ")")
         
         -- Check if it's a chest-like inventory
         if pType == "minecraft:chest" or 
@@ -54,55 +55,105 @@ local function findPeripherals()
            pType == "minecraft:shulker_box" or
            string.find(pType, "chest") or
            string.find(pType, "barrel") then
-            table.insert(chests, {name = name, type = pType})
+            
+            local chest = peripheral.wrap(name)
+            if chest and chest.list then
+                table.insert(chests, {
+                    name = name,
+                    type = pType,
+                    peripheral = chest
+                })
+            end
         end
     end
     
     return chests
 end
 
--- Function to get chest peripheral (supports both direct and wired connections)
-local function getChest(direction)
-    -- First try direct connection
-    local chest = peripheral.wrap(direction)
-    if chest and chest.list then
-        return chest, direction, "direct"
-    end
-    
-    -- If direct connection fails, try wired connection by name
-    local chestName = nil
-    if direction == SOURCE_DIRECTION and SOURCE_NAME then
-        chestName = SOURCE_NAME
-    elseif direction == DEST_DIRECTION and DEST_NAME then
-        chestName = DEST_NAME
-    end
-    
-    if chestName then
-        chest = peripheral.wrap(chestName)
+-- Function to get destination chest
+local function getDestChest()
+    -- Try by specific name first
+    if DEST_NAME then
+        local chest = peripheral.wrap(DEST_NAME)
         if chest and chest.list then
-            return chest, chestName, "wired"
+            return chest, DEST_NAME, "wired"
         end
     end
     
-    -- If specific name fails, try to find any chest-like peripheral
-    local peripherals = peripheral.getNames()
-    for _, name in pairs(peripherals) do
-        local pType = peripheral.getType(name)
-        if pType == "minecraft:chest" or 
-           pType == "minecraft:trapped_chest" or
-           pType == "minecraft:barrel" or
-           string.find(pType, "chest") then
-            chest = peripheral.wrap(name)
-            if chest and chest.list then
-                return chest, name, "wired"
-            end
-        end
+    -- Try direct connection
+    local chest = peripheral.wrap(DEST_DIRECTION)
+    if chest and chest.list then
+        return chest, DEST_DIRECTION, "direct"
     end
     
     return nil, nil, "none"
 end
 
--- Function to clear screen with background color
+-- Function to initialize source chests
+local function initializeSourceChests()
+    sourceChests = {}
+    
+    if AUTO_DISCOVER then
+        -- Auto-discover all chests except destination
+        local allChests = findAllChests()
+        local destChest, destId = getDestChest()
+        
+        for _, chestInfo in ipairs(allChests) do
+            -- Don't include the destination chest as a source
+            if chestInfo.name ~= destId then
+                table.insert(sourceChests, {
+                    name = chestInfo.name,
+                    type = chestInfo.type,
+                    peripheral = chestInfo.peripheral,
+                    enabled = true
+                })
+            end
+        end
+    else
+        -- Use configured source names
+        for _, sourceName in ipairs(SOURCE_NAMES) do
+            local chest = peripheral.wrap(sourceName)
+            if chest and chest.list then
+                table.insert(sourceChests, {
+                    name = sourceName,
+                    type = peripheral.getType(sourceName),
+                    peripheral = chest,
+                    enabled = true
+                })
+            end
+        end
+    end
+end
+
+-- Function to get chest info
+local function getChestInfo(chest, chestName)
+    if not chest then
+        return nil, "No chest connected"
+    end
+    
+    local success, items = pcall(function() return chest.list() end)
+    if not success then
+        return nil, "Failed to read chest inventory"
+    end
+    
+    local itemCount = 0
+    local totalItems = 0
+    
+    for slot, item in pairs(items or {}) do
+        itemCount = itemCount + 1
+        totalItems = totalItems + item.count
+    end
+    
+    return {
+        chest = chest,
+        chestId = chestName,
+        items = items or {},
+        itemCount = itemCount,
+        totalItems = totalItems
+    }, nil
+end
+
+-- Function to clear screen
 local function clearScreen()
     term.setBackgroundColor(BLACK)
     term.setTextColor(WHITE)
@@ -125,51 +176,16 @@ local function drawHeader(title)
     term.setTextColor(WHITE)
 end
 
--- Function to get chest info
-local function getChestInfo(direction)
-    local chest, chestId, connectionType = getChest(direction)
-    if not chest then
-        return nil, "No chest connected"
-    end
-    
-    local success, items = pcall(function() return chest.list() end)
-    if not success then
-        return nil, "Failed to read chest inventory"
-    end
-    
-    local itemCount = 0
-    local totalItems = 0
-    
-    for slot, item in pairs(items or {}) do
-        itemCount = itemCount + 1
-        totalItems = totalItems + item.count
-    end
-    
-    return {
-        chest = chest,
-        chestId = chestId,
-        connectionType = connectionType,
-        items = items or {},
-        itemCount = itemCount,
-        totalItems = totalItems,
-        direction = direction
-    }, nil
-end
-
--- Function to format item name for display
+-- Function to format item name
 local function formatItemName(name, maxLength)
     if not name then return "Unknown Item" end
     
-    -- Remove minecraft: prefix if present
     local displayName = name:gsub("^minecraft:", "")
-    
-    -- Convert underscores to spaces and capitalize
     displayName = displayName:gsub("_", " ")
     displayName = displayName:gsub("(%a)([%w_']*)", function(first, rest)
         return first:upper() .. rest:lower()
     end)
     
-    -- Truncate if too long
     if #displayName > maxLength then
         displayName = displayName:sub(1, maxLength - 3) .. "..."
     end
@@ -193,158 +209,201 @@ local function drawButton(x, y, text, selected)
     term.setTextColor(WHITE)
 end
 
--- Function to draw inventory list
-local function drawInventory(chestInfo, startY)
-    if not chestInfo or not chestInfo.items then
-        term.setCursorPos(2, startY)
-        term.setTextColor(RED)
-        term.write("No chest connected or chest is empty")
-        term.setTextColor(WHITE)
-        return
-    end
-    
-    local items = {}
-    for slot, item in pairs(chestInfo.items) do
-        table.insert(items, {slot = slot, item = item})
-    end
-    
-    -- Sort items by name
-    table.sort(items, function(a, b)
-        return (a.item.name or "") < (b.item.name or "")
-    end)
-    
-    local displayCount = math.min(maxDisplayItems, #items - scrollOffset)
-    
-    for i = 1, displayCount do
-        local itemIndex = i + scrollOffset
-        if itemIndex <= #items then
-            local entry = items[itemIndex]
-            local slot = entry.slot
-            local item = entry.item
-            
-            local y = startY + i - 1
-            term.setCursorPos(2, y)
-            
-            -- Format display
-            local itemName = formatItemName(item.name, 25)
-            local count = item.count or 0
-            local line = string.format("%-25s x%d", itemName, count)
-            
-            -- Display item
-            term.setTextColor(WHITE)
-            term.write(line)
-            
-            -- Show slot number
-            term.setCursorPos(w - 8, y)
-            term.setTextColor(YELLOW)
-            term.write("Slot " .. slot)
-            term.setTextColor(WHITE)
-        end
-    end
-    
-    -- Show scroll indicators
-    if scrollOffset > 0 then
-        term.setCursorPos(w - 1, startY)
-        term.setTextColor(YELLOW)
-        term.write("^")
-    end
-    
-    if scrollOffset + maxDisplayItems < #items then
-        term.setCursorPos(w - 1, startY + maxDisplayItems - 1)
-        term.setTextColor(YELLOW)
-        term.write("v")
-    end
-    
-    term.setTextColor(WHITE)
-end
-
 -- Function to draw main menu
 local function drawMainMenu()
     clearScreen()
-    drawHeader("Chest Transfer UI - Wired Modem Support")
+    drawHeader("Multi-Source Chest Transfer System")
     
-    -- Get chest information
-    local sourceInfo, sourceError = getChestInfo(SOURCE_DIRECTION)
-    local destInfo, destError = getChestInfo(DEST_DIRECTION)
-    
-    -- Display chest status
-    term.setCursorPos(2, 3)
-    term.write("Source Chest (" .. SOURCE_DIRECTION .. "):")
-    term.setCursorPos(4, 4)
-    if sourceInfo then
-        term.setTextColor(LIME)
-        local connectionInfo = sourceInfo.connectionType == "wired" and 
-            " [" .. sourceInfo.chestId .. "]" or " [direct]"
-        term.write("Connected" .. connectionInfo .. " - " .. sourceInfo.itemCount .. 
-                  " item types, " .. sourceInfo.totalItems .. " total items")
-    else
-        term.setTextColor(RED)
-        term.write("Error: " .. (sourceError or "Unknown error"))
+    -- Initialize source chests if not done
+    if #sourceChests == 0 then
+        initializeSourceChests()
     end
     
+    -- Display destination info
+    local destChest, destId, destType = getDestChest()
+    term.setCursorPos(2, 3)
+    term.write("Destination Chest:")
+    term.setCursorPos(4, 4)
+    if destChest then
+        term.setTextColor(LIME)
+        local destInfo = getChestInfo(destChest, destId)
+        if destInfo then
+            term.write("Connected [" .. destId .. "] - " .. destInfo.itemCount .. 
+                      " types, " .. destInfo.totalItems .. " items")
+        else
+            term.write("Connected [" .. destId .. "] - Unable to read inventory")
+        end
+    else
+        term.setTextColor(RED)
+        term.write("Not connected - Check configuration")
+    end
+    
+    -- Display source chests summary
     term.setCursorPos(2, 6)
     term.setTextColor(WHITE)
-    term.write("Destination Chest (" .. DEST_DIRECTION .. "):")
-    term.setCursorPos(4, 7)
-    if destInfo then
-        term.setTextColor(LIME)
-        local connectionInfo = destInfo.connectionType == "wired" and 
-            " [" .. destInfo.chestId .. "]" or " [direct]"
-        term.write("Connected" .. connectionInfo .. " - " .. destInfo.itemCount .. 
-                  " item types, " .. destInfo.totalItems .. " total items")
-    else
-        term.setTextColor(RED)
-        term.write("Error: " .. (destError or "Unknown error"))
+    term.write("Source Chests: " .. #sourceChests .. " found")
+    
+    local enabledCount = 0
+    local totalSourceItems = 0
+    for _, source in ipairs(sourceChests) do
+        if source.enabled then
+            enabledCount = enabledCount + 1
+            local info = getChestInfo(source.peripheral, source.name)
+            if info then
+                totalSourceItems = totalSourceItems + info.totalItems
+            end
+        end
     end
+    
+    term.setCursorPos(4, 7)
+    term.setTextColor(LIME)
+    term.write(enabledCount .. " enabled, " .. totalSourceItems .. " total items to transfer")
     
     term.setTextColor(WHITE)
     
     -- Draw buttons
-    drawButton(2, 9, "View Source Inventory", false)
-    drawButton(2, 11, "View Destination Inventory", false)
+    drawButton(2, 9, "View Source Chests", false)
+    drawButton(2, 11, "View Destination", false)
     drawButton(2, 13, "Transfer All Items", false)
-    drawButton(2, 15, "Scan Peripherals", false)
+    drawButton(2, 15, "Refresh/Scan", false)
     drawButton(2, 17, "Configure Settings", false)
     drawButton(2, 19, "Exit", false)
     
     -- Instructions
     term.setCursorPos(2, h - 2)
     term.setTextColor(YELLOW)
-    term.write("Click on buttons to navigate, or press keys:")
+    term.write("Multi-source transfer: All enabled sources -> Destination")
     term.setCursorPos(2, h - 1)
-    term.write("S=Source, D=Dest, T=Transfer, P=Scan, C=Config, Q=Quit")
+    term.write("S=Sources, D=Dest, T=Transfer, R=Refresh, C=Config, Q=Quit")
     term.setTextColor(WHITE)
 end
 
--- Function to draw inventory view
-local function drawInventoryView(chestType)
+-- Function to draw source chests view
+local function drawSourcesView()
     clearScreen()
-    local title = chestType == "source" and "Source Inventory" or "Destination Inventory"
-    local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
+    drawHeader("Source Chests (" .. #sourceChests .. " found)")
     
-    drawHeader(title .. " (" .. direction .. ")")
-    
-    local chestInfo, error = getChestInfo(direction)
-    
-    if chestInfo then
-        -- Show summary
-        term.setCursorPos(2, 3)
-        local connectionInfo = chestInfo.connectionType == "wired" and 
-            " [" .. chestInfo.chestId .. "]" or " [direct]"
-        term.write("Connection: " .. chestInfo.connectionType .. connectionInfo)
-        term.setCursorPos(2, 4)
-        term.write("Items: " .. chestInfo.itemCount .. " types, " .. chestInfo.totalItems .. " total")
-        
-        -- Draw inventory
-        drawInventory(chestInfo, 6)
-        
-        -- Instructions
-        term.setCursorPos(2, h - 3)
-        term.setTextColor(YELLOW)
-        term.write("Double-click item to extract | Up/Down arrows to scroll")
-        term.setCursorPos(2, h - 2)
-        term.write("B=Back | T=Transfer All | Q=Quit")
+    if #sourceChests == 0 then
+        term.setCursorPos(2, 5)
+        term.setTextColor(RED)
+        term.write("No source chests found!")
+        term.setCursorPos(2, 6)
         term.setTextColor(WHITE)
+        term.write("Try refreshing or check your wired connections.")
+        return
+    end
+    
+    term.setCursorPos(2, 3)
+    term.write("Click on a chest to toggle enabled/disabled:")
+    
+    local startY = 5
+    local displayCount = math.min(maxDisplayItems, #sourceChests - scrollOffset)
+    
+    for i = 1, displayCount do
+        local sourceIndex = i + scrollOffset
+        if sourceIndex <= #sourceChests then
+            local source = sourceChests[sourceIndex]
+            local y = startY + i - 1
+            
+            term.setCursorPos(2, y)
+            
+            -- Status indicator
+            if source.enabled then
+                term.setTextColor(LIME)
+                term.write("[✓] ")
+            else
+                term.setTextColor(RED)
+                term.write("[✗] ")
+            end
+            
+            -- Chest name and type
+            term.setTextColor(WHITE)
+            local displayName = source.name
+            if #displayName > 20 then
+                displayName = displayName:sub(1, 17) .. "..."
+            end
+            term.write(displayName)
+            
+            -- Item count
+            local info = getChestInfo(source.peripheral, source.name)
+            if info then
+                term.setCursorPos(w - 15, y)
+                term.setTextColor(YELLOW)
+                term.write(info.totalItems .. " items")
+            end
+            
+            term.setTextColor(WHITE)
+        end
+    end
+    
+    -- Scroll indicators
+    if scrollOffset > 0 then
+        term.setCursorPos(w - 1, startY)
+        term.setTextColor(YELLOW)
+        term.write("^")
+    end
+    
+    if scrollOffset + maxDisplayItems < #sourceChests then
+        term.setCursorPos(w - 1, startY + maxDisplayItems - 1)
+        term.setTextColor(YELLOW)
+        term.write("v")
+    end
+    
+    -- Instructions
+    term.setCursorPos(2, h - 4)
+    term.setTextColor(YELLOW)
+    term.write("Click chest to toggle | Up/Down to scroll")
+    term.setCursorPos(2, h - 3)
+    term.write("A=Enable All | N=Disable All | B=Back")
+    
+    drawButton(2, h - 5, "Back to Main Menu", false)
+    term.setTextColor(WHITE)
+end
+
+-- Function to draw destination view
+local function drawDestView()
+    clearScreen()
+    drawHeader("Destination Chest")
+    
+    local destChest, destId, destType = getDestChest()
+    local destInfo, error = getChestInfo(destChest, destId)
+    
+    if destInfo then
+        term.setCursorPos(2, 3)
+        term.write("Connection: " .. destType .. " [" .. destId .. "]")
+        term.setCursorPos(2, 4)
+        term.write("Items: " .. destInfo.itemCount .. " types, " .. destInfo.totalItems .. " total")
+        
+        -- Show some items
+        term.setCursorPos(2, 6)
+        term.write("Current inventory:")
+        
+        local items = {}
+        for slot, item in pairs(destInfo.items) do
+            table.insert(items, {slot = slot, item = item})
+        end
+        
+        table.sort(items, function(a, b)
+            return (a.item.name or "") < (b.item.name or "")
+        end)
+        
+        local displayCount = math.min(10, #items)
+        for i = 1, displayCount do
+            local entry = items[i]
+            local y = 7 + i - 1
+            term.setCursorPos(4, y)
+            
+            local itemName = formatItemName(entry.item.name, 25)
+            local count = entry.item.count or 0
+            term.write(string.format("%-25s x%d", itemName, count))
+        end
+        
+        if #items > 10 then
+            term.setCursorPos(4, 17)
+            term.setTextColor(YELLOW)
+            term.write("... and " .. (#items - 10) .. " more item types")
+            term.setTextColor(WHITE)
+        end
     else
         term.setCursorPos(2, 5)
         term.setTextColor(RED)
@@ -352,181 +411,111 @@ local function drawInventoryView(chestType)
         term.setTextColor(WHITE)
     end
     
-    -- Back button
-    drawButton(2, h - 5, "Back to Main Menu", false)
+    drawButton(2, h - 3, "Back to Main Menu", false)
 end
 
--- Function to scan and display peripherals
-local function showPeripheralScan()
+-- Function to transfer all items from all enabled sources
+local function transferAllItems()
+    local destChest, destId = getDestChest()
+    if not destChest then
+        return 0, "Destination chest not found"
+    end
+    
+    local totalTransferred = 0
+    local errors = {}
+    
+    for i, source in ipairs(sourceChests) do
+        if source.enabled then
+            local sourceInfo = getChestInfo(source.peripheral, source.name)
+            if sourceInfo then
+                for slot, item in pairs(sourceInfo.items) do
+                    local transferred = source.peripheral.pushItems(destId, slot)
+                    totalTransferred = totalTransferred + transferred
+                    
+                    if transferred == 0 and item.count > 0 then
+                        table.insert(errors, "Failed to transfer " .. item.name .. " from " .. source.name)
+                    end
+                end
+            end
+        end
+    end
+    
+    return totalTransferred, errors
+end
+
+-- Function to show transfer progress
+local function showTransferProgress()
     clearScreen()
-    drawHeader("Peripheral Scanner")
-    
-    term.setCursorPos(2, 3)
-    term.write("Scanning for connected peripherals...")
-    
-    local chests = findPeripherals()
+    drawHeader("Transfer in Progress...")
     
     term.setCursorPos(2, 5)
-    term.write("Found " .. #chests .. " chest-like peripherals:")
+    term.write("Transferring items from all enabled sources...")
     
-    for i, chest in ipairs(chests) do
-        term.setCursorPos(4, 6 + i)
+    local transferred, errors = transferAllItems()
+    
+    term.setCursorPos(2, 7)
+    if transferred > 0 then
         term.setTextColor(LIME)
-        term.write(chest.name .. " (" .. chest.type .. ")")
-        term.setTextColor(WHITE)
-    end
-    
-    if #chests == 0 then
-        term.setCursorPos(4, 7)
+        term.write("Successfully transferred " .. transferred .. " items!")
+    else
         term.setTextColor(RED)
-        term.write("No chest peripherals found!")
-        term.setTextColor(WHITE)
+        term.write("No items were transferred.")
     end
     
-    term.setCursorPos(2, h - 3)
-    term.setTextColor(YELLOW)
-    term.write("Note: Update chest_config.lua with peripheral names for wired connections")
-    term.setCursorPos(2, h - 2)
-    term.write("Press any key to continue...")
-    term.setTextColor(WHITE)
-    
-    os.pullEvent("key")
-end
-
--- Function to show extraction dialog
-local function showExtractionDialog(chestType, slot, item)
-    -- Clear area for dialog
-    local dialogW = 40
-    local dialogH = 8
-    local startX = math.floor((w - dialogW) / 2)
-    local startY = math.floor((h - dialogH) / 2)
-    
-    -- Draw dialog box
-    term.setBackgroundColor(BLUE)
-    for y = startY, startY + dialogH - 1 do
-        term.setCursorPos(startX, y)
-        term.write(string.rep(" ", dialogW))
-    end
-    
-    -- Dialog title
-    term.setCursorPos(startX + 2, startY + 1)
-    term.setTextColor(WHITE)
-    term.write("Extract Items")
-    
-    -- Item info
-    local itemName = formatItemName(item.name, 30)
-    term.setCursorPos(startX + 2, startY + 3)
-    term.write("Item: " .. itemName)
-    term.setCursorPos(startX + 2, startY + 4)
-    term.write("Available: " .. item.count)
-    
-    -- Input prompt
-    term.setCursorPos(startX + 2, startY + 5)
-    term.write("Extract amount (max " .. item.count .. "):")
-    
-    -- Input field
-    term.setCursorPos(startX + 2, startY + 6)
-    term.setBackgroundColor(WHITE)
-    term.setTextColor(BLACK)
-    term.write(string.rep(" ", 10))
-    term.setCursorPos(startX + 2, startY + 6)
-    
-    -- Get input
-    local input = read()
-    local amount = tonumber(input)
-    
-    term.setBackgroundColor(BLACK)
-    term.setTextColor(WHITE)
-    
-    if amount and amount > 0 and amount <= item.count then
-        -- Perform extraction
-        local sourceChest, sourceId = getChest(chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION)
-        local destChest, destId = getChest(chestType == "source" and DEST_DIRECTION or SOURCE_DIRECTION)
-        
-        if sourceChest and destChest then
-            -- Use the peripheral ID for wired connections
-            local targetId = destId or peripheral.getName(destChest)
-            local transferred = sourceChest.pushItems(targetId, slot, amount)
-            
-            -- Show result
-            term.setCursorPos(startX + 2, startY + 7)
-            if transferred > 0 then
-                term.setTextColor(LIME)
-                term.write("Transferred " .. transferred .. " items!")
-            else
-                term.setTextColor(RED)
-                term.write("Transfer failed!")
+    if type(errors) == "table" and #errors > 0 then
+        term.setCursorPos(2, 9)
+        term.setTextColor(YELLOW)
+        term.write("Warnings:")
+        for i, error in ipairs(errors) do
+            if i <= 5 then -- Show max 5 errors
+                term.setCursorPos(4, 9 + i)
+                term.setTextColor(ORANGE)
+                term.write(error)
             end
-            
-            sleep(2)
         end
-    elseif amount then
-        -- Invalid amount
-        term.setCursorPos(startX + 2, startY + 7)
-        term.setTextColor(RED)
-        term.write("Invalid amount!")
-        sleep(2)
+        if #errors > 5 then
+            term.setCursorPos(4, 15)
+            term.write("... and " .. (#errors - 5) .. " more issues")
+        end
     end
+    
+    term.setCursorPos(2, h - 2)
+    term.setTextColor(WHITE)
+    term.write("Press any key to continue...")
+    os.pullEvent("key")
 end
 
 -- Function to handle mouse clicks
 local function handleClick(x, y)
     if currentView == "main" then
-        if y == 9 and x >= 2 and x <= 25 then -- View Source
-            currentView = "source"
+        if y == 9 and x >= 2 and x <= 20 then -- View Sources
+            currentView = "sources"
             scrollOffset = 0
-        elseif y == 11 and x >= 2 and x <= 30 then -- View Destination
+        elseif y == 11 and x >= 2 and x <= 18 then -- View Destination
             currentView = "dest"
-            scrollOffset = 0
         elseif y == 13 and x >= 2 and x <= 20 then -- Transfer All
-            local sourceInfo = getChestInfo(SOURCE_DIRECTION)
-            if sourceInfo and sourceInfo.chest then
-                local destChest, destId = getChest(DEST_DIRECTION)
-                if destChest then
-                    local transferred = 0
-                    local targetId = destId or peripheral.getName(destChest)
-                    for slot, item in pairs(sourceInfo.items) do
-                        local moved = sourceInfo.chest.pushItems(targetId, slot)
-                        transferred = transferred + moved
-                    end
-                    
-                    term.setCursorPos(2, 21)
-                    term.setTextColor(LIME)
-                    term.write("Transferred " .. transferred .. " items!")
-                    term.setTextColor(WHITE)
-                    sleep(2)
-                end
-            end
-        elseif y == 15 and x >= 2 and x <= 18 then -- Scan Peripherals
-            showPeripheralScan()
+            showTransferProgress()
+        elseif y == 15 and x >= 2 and x <= 15 then -- Refresh
+            sourceChests = {}
+            initializeSourceChests()
         elseif y == 17 and x >= 2 and x <= 20 then -- Configure
             shell.run("edit", "chest_config.lua")
         elseif y == 19 and x >= 2 and x <= 8 then -- Exit
             return false
         end
-    elseif currentView == "source" or currentView == "dest" then
-        if y >= 6 and y < 6 + maxDisplayItems then -- Item click (adjusted for new layout)
-            local chestType = currentView
-            local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
-            local chestInfo = getChestInfo(direction)
-            
-            if chestInfo and chestInfo.items then
-                local items = {}
-                for slot, item in pairs(chestInfo.items) do
-                    table.insert(items, {slot = slot, item = item})
-                end
-                
-                table.sort(items, function(a, b)
-                    return (a.item.name or "") < (b.item.name or "")
-                end)
-                
-                local itemIndex = (y - 6) + 1 + scrollOffset
-                if itemIndex <= #items then
-                    local entry = items[itemIndex]
-                    showExtractionDialog(chestType, entry.slot, entry.item)
-                end
+    elseif currentView == "sources" then
+        local startY = 5
+        if y >= startY and y < startY + maxDisplayItems then
+            local sourceIndex = (y - startY) + 1 + scrollOffset
+            if sourceIndex <= #sourceChests then
+                -- Toggle enabled status
+                sourceChests[sourceIndex].enabled = not sourceChests[sourceIndex].enabled
             end
         elseif y == h - 5 and x >= 2 and x <= 20 then -- Back button
+            currentView = "main"
+        end
+    elseif currentView == "dest" then
+        if y == h - 3 and x >= 2 and x <= 20 then -- Back button
             currentView = "main"
         end
     end
@@ -538,39 +527,29 @@ end
 local function handleKey(key)
     if key == keys.q then
         return false
-    elseif key == keys.b and (currentView == "source" or currentView == "dest") then
+    elseif key == keys.b then
         currentView = "main"
     elseif key == keys.s and currentView == "main" then
-        currentView = "source"
+        currentView = "sources"
         scrollOffset = 0
     elseif key == keys.d and currentView == "main" then
         currentView = "dest"
-        scrollOffset = 0
-    elseif key == keys.p and currentView == "main" then
-        showPeripheralScan()
-    elseif key == keys.up and (currentView == "source" or currentView == "dest") then
-        scrollOffset = math.max(0, scrollOffset - 1)
-    elseif key == keys.down and (currentView == "source" or currentView == "dest") then
-        scrollOffset = scrollOffset + 1
+    elseif key == keys.r and currentView == "main" then
+        sourceChests = {}
+        initializeSourceChests()
     elseif key == keys.t then
-        -- Transfer all items
-        local sourceInfo = getChestInfo(SOURCE_DIRECTION)
-        if sourceInfo and sourceInfo.chest then
-            local destChest, destId = getChest(DEST_DIRECTION)
-            if destChest then
-                local transferred = 0
-                local targetId = destId or peripheral.getName(destChest)
-                for slot, item in pairs(sourceInfo.items) do
-                    local moved = sourceInfo.chest.pushItems(targetId, slot)
-                    transferred = transferred + moved
-                end
-                
-                term.setCursorPos(2, h - 1)
-                term.setTextColor(LIME)
-                term.write("Transferred " .. transferred .. " items!")
-                term.setTextColor(WHITE)
-                sleep(1)
-            end
+        showTransferProgress()
+    elseif key == keys.up and currentView == "sources" then
+        scrollOffset = math.max(0, scrollOffset - 1)
+    elseif key == keys.down and currentView == "sources" then
+        scrollOffset = math.min(#sourceChests - maxDisplayItems, scrollOffset + 1)
+    elseif key == keys.a and currentView == "sources" then -- Enable all
+        for _, source in ipairs(sourceChests) do
+            source.enabled = true
+        end
+    elseif key == keys.n and currentView == "sources" then -- Disable all
+        for _, source in ipairs(sourceChests) do
+            source.enabled = false
         end
     end
     
@@ -579,61 +558,21 @@ end
 
 -- Main UI loop
 local function runUI()
-    local lastClickTime = 0
-    local lastClickX, lastClickY = 0, 0
-    
     while true do
-        -- Draw current view
         if currentView == "main" then
             drawMainMenu()
-        elseif currentView == "source" then
-            drawInventoryView("source")
+        elseif currentView == "sources" then
+            drawSourcesView()
         elseif currentView == "dest" then
-            drawInventoryView("dest")
+            drawDestView()
         end
         
-        -- Wait for events
         local event, button, x, y = os.pullEvent()
         
         if event == "mouse_click" then
-            local currentTime = os.clock()
-            local isDoubleClick = (currentTime - lastClickTime < 0.5) and 
-                                 (x == lastClickX) and (y == lastClickY)
-            
-            if isDoubleClick and (currentView == "source" or currentView == "dest") then
-                -- Handle double-click for item extraction
-                if y >= 6 and y < 6 + maxDisplayItems then
-                    local chestType = currentView
-                    local direction = chestType == "source" and SOURCE_DIRECTION or DEST_DIRECTION
-                    local chestInfo = getChestInfo(direction)
-                    
-                    if chestInfo and chestInfo.items then
-                        local items = {}
-                        for slot, item in pairs(chestInfo.items) do
-                            table.insert(items, {slot = slot, item = item})
-                        end
-                        
-                        table.sort(items, function(a, b)
-                            return (a.item.name or "") < (b.item.name or "")
-                        end)
-                        
-                        local itemIndex = (y - 6) + 1 + scrollOffset
-                        if itemIndex <= #items then
-                            local entry = items[itemIndex]
-                            showExtractionDialog(chestType, entry.slot, entry.item)
-                        end
-                    end
-                end
-            else
-                -- Handle single click
-                if not handleClick(x, y) then
-                    break
-                end
+            if not handleClick(x, y) then
+                break
             end
-            
-            lastClickTime = currentTime
-            lastClickX, lastClickY = x, y
-            
         elseif event == "key" then
             if not handleKey(button) then
                 break
@@ -647,7 +586,7 @@ term.setBackgroundColor(BLACK)
 term.setTextColor(WHITE)
 clearScreen()
 
-print("Starting Chest Transfer UI with Wired Modem Support...")
+print("Starting Multi-Source Chest Transfer System...")
 sleep(1)
 
 runUI()
@@ -655,5 +594,5 @@ runUI()
 -- Cleanup
 clearScreen()
 term.setCursorPos(1, 1)
-print("Chest Transfer UI closed.")
+print("Multi-Source Transfer System closed.")
 term.setTextColor(WHITE)
